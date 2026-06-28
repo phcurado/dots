@@ -1,11 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::IsTerminal;
 use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use mlua::{Lua, Table, Value};
+use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
@@ -14,7 +18,7 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Lua config file. Defaults to dots.lua or dots/init.lua in the project root.
+    /// Lua config file. Defaults to dots.lua in the project root.
     #[arg(short, long, global = true)]
     file: Option<PathBuf>,
 }
@@ -25,6 +29,25 @@ enum Command {
     Plan,
     /// Apply the planned changes.
     Apply,
+    /// Inspect or edit local state.
+    State {
+        #[command(subcommand)]
+        command: StateCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum StateCommand {
+    /// List resources tracked in state.
+    List,
+    /// Stop tracking a resource without changing the filesystem.
+    Forget { resource: String },
+}
+
+#[derive(Debug, Default)]
+struct Config {
+    symlinks: Vec<SymlinkResource>,
+    packages: Vec<PackageResource>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,22 +57,55 @@ struct SymlinkResource {
 }
 
 #[derive(Debug, Clone)]
+struct SymlinkDeclaration {
+    target: PathBuf,
+    source: PathBuf,
+    ignore: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PackageResource {
+    provider: String,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
 enum PlanStep {
-    Create(SymlinkResource),
-    Update(SymlinkResource),
-    Remove(StateResource),
-    Noop(SymlinkResource),
-    Conflict {
+    SymlinkCreate(SymlinkResource),
+    SymlinkUpdate(SymlinkResource),
+    SymlinkRemove {
+        target: PathBuf,
+        source: PathBuf,
+    },
+    SymlinkNoop(SymlinkResource),
+    SymlinkConflict {
         resource: SymlinkResource,
+        reason: String,
+    },
+    PackageCreate(PackageResource),
+    PackageRemove(PackageResource),
+    PackageNoop(PackageResource),
+    PackageConflict {
+        resource: PackageResource,
         reason: String,
     },
 }
 
+#[derive(Debug, Default)]
+struct PlanSummary {
+    create: usize,
+    update: usize,
+    remove: usize,
+    conflicts: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StateResource {
-    kind: String,
-    target: PathBuf,
-    source: PathBuf,
+#[serde(tag = "kind")]
+enum StateResource {
+    #[serde(rename = "symlink")]
+    Symlink { target: PathBuf, source: PathBuf },
+    #[serde(rename = "package")]
+    Package { provider: String, name: String },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -66,16 +122,36 @@ struct Project {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let project = find_project(cli.file)?;
-    let resources = load_config(&project)?;
     let state_path = project.root.join(".dots/state.json");
+    let state_exists = state_path.exists();
     let mut state = load_state(&state_path)?;
-    let plan = build_plan(&resources, &state)?;
 
-    print_plan(&plan);
-
-    if matches!(cli.command, Command::Apply) {
-        apply_plan(&plan, &mut state)?;
-        save_state(&state_path, &state)?;
+    match cli.command {
+        Command::Plan => {
+            let config = load_config(&project)?;
+            if !state_exists {
+                print_state_initialized(&project, &state_path);
+            }
+            refresh_state_from_system(&config, &mut state)?;
+            save_state(&state_path, &state)?;
+            let plan = build_plan(&config, &state)?;
+            print_plan(&project, &plan);
+        }
+        Command::Apply => {
+            let config = load_config(&project)?;
+            if !state_exists {
+                print_state_initialized(&project, &state_path);
+            }
+            refresh_state_from_system(&config, &mut state)?;
+            save_state(&state_path, &state)?;
+            let plan = build_plan(&config, &state)?;
+            print_plan(&project, &plan);
+            apply_plan(&plan, &mut state)?;
+            save_state(&state_path, &state)?;
+        }
+        Command::State { command } => {
+            run_state_command(&project, &state_path, &mut state, command)?;
+        }
     }
 
     Ok(())
@@ -94,39 +170,30 @@ fn find_project(file: Option<PathBuf>) -> Result<Project> {
 
     let mut dir = std::env::current_dir()?;
     loop {
-        let dots_lua = dir.join("dots.lua");
-        if dots_lua.exists() {
-            return Ok(Project {
-                root: dir,
-                config: dots_lua,
-            });
-        }
-
-        let init_lua = dir.join("dots/init.lua");
-        if init_lua.exists() {
-            return Ok(Project {
-                root: dir,
-                config: init_lua,
-            });
+        let config = dir.join("dots.lua");
+        if config.exists() {
+            return Ok(Project { root: dir, config });
         }
 
         if !dir.pop() {
-            bail!("could not find dots.lua or dots/init.lua")
+            bail!("could not find dots.lua")
         }
     }
 }
 
-fn load_config(project: &Project) -> Result<Vec<SymlinkResource>> {
+fn load_config(project: &Project) -> Result<Config> {
     let lua = Lua::new();
-    let resources = lua.create_table()?;
+    let symlinks = lua.create_table()?;
+    let packages = lua.create_table()?;
     let dots = lua.create_table()?;
 
     let root = project.root.clone();
-    let symlink = lua.create_function(move |_, args: mlua::MultiValue| {
+    let collected_symlinks = symlinks.clone();
+    let symlink = lua.create_function(move |lua, args: mlua::MultiValue| {
         let values = args.into_iter().collect::<Vec<_>>();
-        if values.len() != 2 {
+        if values.len() != 2 && values.len() != 3 {
             return Err(mlua::Error::RuntimeError(
-                "expected dots.symlink(target, source)".to_string(),
+                "expected dots.symlink(target, source[, opts])".to_string(),
             ));
         }
 
@@ -134,18 +201,44 @@ fn load_config(project: &Project) -> Result<Vec<SymlinkResource>> {
         let source = value_to_string(&values[1], "source")?;
 
         let item = lua.create_table()?;
-        item.set("type", "symlink")?;
         item.set("target", expand_home(&target).display().to_string())?;
         item.set(
             "source",
             resolve_source(&root, &source).display().to_string(),
         )?;
-        resources.raw_push(item)?;
+
+        if let Some(opts) = values.get(2) {
+            let Value::Table(opts) = opts else {
+                return Err(mlua::Error::RuntimeError(
+                    "dots.symlink opts must be a table".to_string(),
+                ));
+            };
+            if let Some(ignore) = opts.get::<Option<Table>>("ignore")? {
+                item.set("ignore", ignore)?;
+            }
+        }
+
+        collected_symlinks.raw_push(item)?;
         Ok(())
     })?;
 
+    let collected_packages = packages.clone();
+    let paru = lua.create_table()?;
+    let paru_install = lua.create_function(move |lua, args: mlua::MultiValue| {
+        for name in package_names_from_args(args)? {
+            let item = lua.create_table()?;
+            item.set("provider", "paru")?;
+            item.set("name", name)?;
+            collected_packages.raw_push(item)?;
+        }
+        Ok(())
+    })?;
+    paru.set("install", paru_install)?;
+
     dots.set("symlink", symlink)?;
+    dots.set("paru", paru)?;
     dots.set("root", project.root.display().to_string())?;
+    dots.set("os", std::env::consts::OS)?;
 
     let package: Table = lua.globals().get("package")?;
     let preload: Table = package.get("preload")?;
@@ -164,15 +257,54 @@ fn load_config(project: &Project) -> Result<Vec<SymlinkResource>> {
         .set_name(project.config.display().to_string())
         .exec()?;
 
-    let mut out = Vec::new();
-    for item in resources.sequence_values::<Table>() {
+    let mut config = Config::default();
+    for item in symlinks.sequence_values::<Table>() {
         let item = item?;
-        out.push(SymlinkResource {
+        let declaration = SymlinkDeclaration {
             target: PathBuf::from(item.get::<String>("target")?),
             source: PathBuf::from(item.get::<String>("source")?),
+            ignore: table_strings(item.get::<Option<Table>>("ignore")?)?,
+        };
+        config
+            .symlinks
+            .extend(expand_symlink_declaration(&declaration)?);
+    }
+    for item in packages.sequence_values::<Table>() {
+        let item = item?;
+        config.packages.push(PackageResource {
+            provider: item.get::<String>("provider")?,
+            name: item.get::<String>("name")?,
         });
     }
-    Ok(out)
+    dedupe_config(&mut config)?;
+    Ok(config)
+}
+
+fn dedupe_config(config: &mut Config) -> Result<()> {
+    let mut symlinks = BTreeMap::<PathBuf, SymlinkResource>::new();
+    for resource in config.symlinks.drain(..) {
+        match symlinks.get(&resource.target) {
+            Some(existing) if same_path(&existing.source, &resource.source) => {}
+            Some(existing) => bail!(
+                "duplicate symlink target {} points to both {} and {}",
+                resource.target.display(),
+                existing.source.display(),
+                resource.source.display()
+            ),
+            None => {
+                symlinks.insert(resource.target.clone(), resource);
+            }
+        }
+    }
+    config.symlinks = symlinks.into_values().collect();
+
+    let mut packages = BTreeMap::<String, PackageResource>::new();
+    for resource in config.packages.drain(..) {
+        packages.insert(package_id_for(&resource), resource);
+    }
+    config.packages = packages.into_values().collect();
+
+    Ok(())
 }
 
 fn install_package_path(lua: &Lua, root: &Path) -> Result<()> {
@@ -195,6 +327,58 @@ fn value_to_string(value: &Value, name: &str) -> mlua::Result<String> {
     }
 }
 
+fn table_strings(table: Option<Table>) -> mlua::Result<Vec<String>> {
+    let Some(table) = table else {
+        return Ok(Vec::new());
+    };
+    let mut values = Vec::new();
+    for value in table.sequence_values::<Value>() {
+        match value? {
+            Value::String(value) => values.push(value.to_string_lossy()),
+            other => {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "ignore patterns must be strings, got {other:?}"
+                )));
+            }
+        }
+    }
+    Ok(values)
+}
+
+fn package_names_from_args(args: mlua::MultiValue) -> mlua::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for value in args {
+        match value {
+            Value::String(name) => names.push(name.to_string_lossy()),
+            Value::Table(table) => {
+                for value in table.sequence_values::<Value>() {
+                    names.push(value_to_package_name(value?)?);
+                }
+            }
+            other => {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "expected package name or list of package names, got {other:?}"
+                )));
+            }
+        }
+    }
+    if names.is_empty() {
+        return Err(mlua::Error::RuntimeError(
+            "expected at least one package name".to_string(),
+        ));
+    }
+    Ok(names)
+}
+
+fn value_to_package_name(value: Value) -> mlua::Result<String> {
+    match value {
+        Value::String(name) => Ok(name.to_string_lossy()),
+        other => Err(mlua::Error::RuntimeError(format!(
+            "package name must be a string, got {other:?}"
+        ))),
+    }
+}
+
 fn expand_home(path: &str) -> PathBuf {
     if path == "~" {
         return home_dir();
@@ -212,6 +396,79 @@ fn resolve_source(root: &Path, source: &str) -> PathBuf {
     } else {
         root.join(path)
     }
+}
+
+fn expand_symlink_declaration(declaration: &SymlinkDeclaration) -> Result<Vec<SymlinkResource>> {
+    let target_is_directory = fs::symlink_metadata(&declaration.target)
+        .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        .unwrap_or(false);
+    let should_expand =
+        declaration.source.is_dir() && (!declaration.ignore.is_empty() || target_is_directory);
+
+    if !should_expand {
+        return Ok(vec![SymlinkResource {
+            target: declaration.target.clone(),
+            source: declaration.source.clone(),
+        }]);
+    }
+
+    let ignore = build_ignore_set(&declaration.ignore)?;
+    let mut resources = Vec::new();
+    expand_symlink_dir(
+        &declaration.target,
+        &declaration.source,
+        Path::new(""),
+        &ignore,
+        &mut resources,
+    )?;
+    Ok(resources)
+}
+
+fn expand_symlink_dir(
+    target_root: &Path,
+    source_root: &Path,
+    relative: &Path,
+    ignore: &GlobSet,
+    resources: &mut Vec<SymlinkResource>,
+) -> Result<()> {
+    let source_dir = source_root.join(relative);
+    for entry in fs::read_dir(&source_dir)
+        .with_context(|| format!("failed to read {}", source_dir.display()))?
+    {
+        let entry = entry?;
+        let name = entry.file_name();
+        let relative = relative.join(name);
+        if ignore.is_match(&relative) {
+            continue;
+        }
+
+        let source = source_root.join(&relative);
+        let target = target_root.join(&relative);
+        let metadata = fs::symlink_metadata(&source)?;
+
+        if metadata.is_dir()
+            && fs::symlink_metadata(&target)
+                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                .unwrap_or(false)
+        {
+            expand_symlink_dir(target_root, source_root, &relative, ignore, resources)?;
+        } else {
+            resources.push(SymlinkResource { target, source });
+        }
+    }
+    Ok(())
+}
+
+fn build_ignore_set(patterns: &[String]) -> Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        builder
+            .add(Glob::new(pattern).with_context(|| format!("invalid ignore pattern: {pattern}"))?);
+        if let Some(dir) = pattern.strip_suffix("/**") {
+            builder.add(Glob::new(dir).with_context(|| format!("invalid ignore pattern: {dir}"))?);
+        }
+    }
+    Ok(builder.build()?)
 }
 
 fn home_dir() -> PathBuf {
@@ -237,17 +494,80 @@ fn save_state(path: &Path, state: &State) -> Result<()> {
     Ok(())
 }
 
-fn build_plan(resources: &[SymlinkResource], state: &State) -> Result<Vec<PlanStep>> {
+fn run_state_command(
+    project: &Project,
+    state_path: &Path,
+    state: &mut State,
+    command: StateCommand,
+) -> Result<()> {
+    match command {
+        StateCommand::List => print_state(project, state),
+        StateCommand::Forget { resource } => {
+            let key = state_key_from_arg(&resource);
+            if state.resources.remove(&key).is_some() {
+                save_state(state_path, state)?;
+                println!("{} {}", "Forgot:".bold(), resource);
+            } else {
+                bail!("resource is not tracked: {resource}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_state(project: &Project, state: &State) {
+    if state.resources.is_empty() {
+        println!("{}", dim("State is empty."));
+        return;
+    }
+
+    println!("{}", bold("State:"));
+    for (id, resource) in &state.resources {
+        match resource {
+            StateResource::Symlink { target, source } => println!(
+                "  symlink {} -> {}",
+                display_target(target),
+                display_source(project, source),
+            ),
+            StateResource::Package { provider, name } => {
+                println!("  package {provider} {name}")
+            }
+        }
+        println!("    {}", dim(id));
+    }
+}
+
+fn state_key_from_arg(resource: &str) -> String {
+    if resource.starts_with("symlink:") || resource.starts_with("package:") {
+        resource.to_string()
+    } else {
+        format!("symlink:{}", expand_home(resource).display())
+    }
+}
+
+fn refresh_state_from_system(config: &Config, state: &mut State) -> Result<()> {
+    for resource in &config.symlinks {
+        if symlink_matches(resource)? {
+            state
+                .resources
+                .insert(symlink_id_for(resource), state_symlink(resource));
+        }
+    }
+
+    Ok(())
+}
+
+fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
     let mut plan = Vec::new();
     let mut declared = BTreeSet::new();
 
-    for resource in resources {
-        let id = resource_id(resource);
+    for resource in &config.symlinks {
+        let id = symlink_id_for(resource);
         declared.insert(id.clone());
         let owned = state.resources.contains_key(&id);
 
         if !resource.source.exists() {
-            plan.push(PlanStep::Conflict {
+            plan.push(PlanStep::SymlinkConflict {
                 resource: resource.clone(),
                 reason: format!("source does not exist: {}", resource.source.display()),
             });
@@ -257,134 +577,543 @@ fn build_plan(resources: &[SymlinkResource], state: &State) -> Result<Vec<PlanSt
         match fs::symlink_metadata(&resource.target) {
             Ok(meta) if meta.file_type().is_symlink() => {
                 let current = fs::read_link(&resource.target)?;
-                if same_path(&current, &resource.source) {
-                    plan.push(PlanStep::Noop(resource.clone()));
+                let current = resolve_symlink_target(&resource.target, &current);
+                if owned && same_path(&current, &resource.source) {
+                    plan.push(PlanStep::SymlinkNoop(resource.clone()));
                 } else if owned {
-                    plan.push(PlanStep::Update(resource.clone()));
+                    plan.push(PlanStep::SymlinkUpdate(resource.clone()));
+                } else if same_path(&current, &resource.source) {
+                    plan.push(PlanStep::SymlinkNoop(resource.clone()));
                 } else {
-                    plan.push(PlanStep::Conflict {
+                    plan.push(PlanStep::SymlinkConflict {
                         resource: resource.clone(),
-                        reason: format!("target is unmanaged symlink to {}", current.display()),
+                        reason: "target exists but is not managed".to_string(),
                     });
                 }
             }
-            Ok(_) => plan.push(PlanStep::Conflict {
+            Ok(_) => plan.push(PlanStep::SymlinkConflict {
                 resource: resource.clone(),
                 reason: "target exists and is not a symlink".to_string(),
             }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                plan.push(PlanStep::Create(resource.clone()));
+                plan.push(PlanStep::SymlinkCreate(resource.clone()));
             }
             Err(error) => return Err(error.into()),
         }
     }
 
+    for resource in &config.packages {
+        let id = package_id_for(resource);
+        declared.insert(id.clone());
+
+        if !package_provider_available(&resource.provider) {
+            plan.push(PlanStep::PackageConflict {
+                resource: resource.clone(),
+                reason: format!("{} is not available", resource.provider),
+            });
+            continue;
+        }
+
+        if package_installed(resource)? {
+            plan.push(PlanStep::PackageNoop(resource.clone()));
+        } else {
+            plan.push(PlanStep::PackageCreate(resource.clone()));
+        }
+    }
+
     for (id, resource) in &state.resources {
-        if resource.kind == "symlink" && !declared.contains(id) {
-            plan.push(PlanStep::Remove(resource.clone()));
+        if declared.contains(id) {
+            continue;
+        }
+        match resource {
+            StateResource::Symlink { target, source } => plan.push(PlanStep::SymlinkRemove {
+                target: target.clone(),
+                source: source.clone(),
+            }),
+            StateResource::Package { provider, name } => {
+                plan.push(PlanStep::PackageRemove(PackageResource {
+                    provider: provider.clone(),
+                    name: name.clone(),
+                }))
+            }
         }
     }
 
     Ok(plan)
 }
 
-fn same_path(left: &Path, right: &Path) -> bool {
-    left == right || fs::canonicalize(left).ok() == fs::canonicalize(right).ok()
+fn package_provider_available(provider: &str) -> bool {
+    match provider {
+        "paru" => ProcessCommand::new("paru")
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false),
+        _ => false,
+    }
 }
 
-fn resource_id(resource: &SymlinkResource) -> String {
+fn package_installed(resource: &PackageResource) -> Result<bool> {
+    match resource.provider.as_str() {
+        "paru" => Ok(ProcessCommand::new("paru")
+            .arg("-Q")
+            .arg(&resource.name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .with_context(|| "failed to query paru")?
+            .success()),
+        provider => bail!("unsupported package provider: {provider}"),
+    }
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn symlink_matches(resource: &SymlinkResource) -> Result<bool> {
+    let Ok(meta) = fs::symlink_metadata(&resource.target) else {
+        return Ok(false);
+    };
+    if !meta.file_type().is_symlink() || !resource.source.exists() {
+        return Ok(false);
+    }
+    let current = fs::read_link(&resource.target)?;
+    let current = resolve_symlink_target(&resource.target, &current);
+    Ok(same_path(&current, &resource.source))
+}
+
+fn resolve_symlink_target(target: &Path, link: &Path) -> PathBuf {
+    if link.is_absolute() {
+        link.to_path_buf()
+    } else {
+        target.parent().unwrap_or_else(|| Path::new(".")).join(link)
+    }
+}
+
+fn state_symlink(resource: &SymlinkResource) -> StateResource {
+    StateResource::Symlink {
+        target: resource.target.clone(),
+        source: resource.source.clone(),
+    }
+}
+
+fn state_package(resource: &PackageResource) -> StateResource {
+    StateResource::Package {
+        provider: resource.provider.clone(),
+        name: resource.name.clone(),
+    }
+}
+
+fn symlink_id_for(resource: &SymlinkResource) -> String {
     format!("symlink:{}", resource.target.display())
 }
 
-fn print_plan(plan: &[PlanStep]) {
-    println!("Symlinks:");
-    if plan.is_empty() {
-        println!("  no changes");
+fn package_id_for(resource: &PackageResource) -> String {
+    format!("package:{}:{}", resource.provider, resource.name)
+}
+
+fn display_target(path: &Path) -> String {
+    let home = home_dir();
+    if path == home {
+        return "~".to_string();
+    }
+    if let Ok(rest) = path.strip_prefix(&home) {
+        return format!("~/{}", rest.display());
+    }
+    path.display().to_string()
+}
+
+fn display_source(project: &Project, path: &Path) -> String {
+    if let Ok(rest) = path.strip_prefix(&project.root) {
+        if rest.as_os_str().is_empty() {
+            return ".".to_string();
+        }
+        return rest.display().to_string();
+    }
+    display_target(path)
+}
+
+fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
+    let mut summary = PlanSummary::default();
+    for step in plan {
+        match step {
+            PlanStep::SymlinkCreate(_) | PlanStep::PackageCreate(_) => summary.create += 1,
+            PlanStep::SymlinkUpdate(_) => summary.update += 1,
+            PlanStep::SymlinkRemove { .. } | PlanStep::PackageRemove(_) => summary.remove += 1,
+            PlanStep::SymlinkConflict { .. } | PlanStep::PackageConflict { .. } => {
+                summary.conflicts += 1
+            }
+            PlanStep::SymlinkNoop(_) | PlanStep::PackageNoop(_) => {}
+        }
+    }
+    summary
+}
+
+fn print_plan(project: &Project, plan: &[PlanStep]) {
+    let summary = summarize_plan(plan);
+    let has_changes = summary.create + summary.update + summary.remove + summary.conflicts > 0;
+    if !has_changes {
+        println!("{}", dim("No changes."));
         return;
     }
 
+    let has_symlinks = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::SymlinkCreate(_)
+                | PlanStep::SymlinkUpdate(_)
+                | PlanStep::SymlinkRemove { .. }
+                | PlanStep::SymlinkConflict { .. }
+        )
+    });
+    if has_symlinks {
+        println!("{}", bold("Symlinks:"));
+        for step in plan {
+            match step {
+                PlanStep::SymlinkCreate(resource) => println!(
+                    "  {} symlink {} -> {}",
+                    green("+"),
+                    display_target(&resource.target),
+                    display_source(project, &resource.source),
+                ),
+                PlanStep::SymlinkUpdate(resource) => println!(
+                    "  {} symlink {} -> {}",
+                    yellow("~"),
+                    display_target(&resource.target),
+                    display_source(project, &resource.source),
+                ),
+                PlanStep::SymlinkRemove { target, .. } => {
+                    println!("  {} symlink {}", red("-"), display_target(target))
+                }
+                PlanStep::SymlinkConflict { resource, reason } => println!(
+                    "  {} symlink {} ({reason})",
+                    red("!"),
+                    display_target(&resource.target)
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    let has_packages = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::PackageCreate(_)
+                | PlanStep::PackageRemove(_)
+                | PlanStep::PackageConflict { .. }
+        )
+    });
+    if has_packages {
+        if has_symlinks {
+            println!();
+        }
+        println!("{}", bold("Packages:"));
+        for step in plan {
+            match step {
+                PlanStep::PackageCreate(resource) => {
+                    println!("  {} {} {}", green("+"), resource.provider, resource.name,)
+                }
+                PlanStep::PackageRemove(resource) => {
+                    println!("  {} {} {}", red("-"), resource.provider, resource.name,)
+                }
+                PlanStep::PackageConflict { resource, reason } => println!(
+                    "  {} {} {} ({reason})",
+                    red("!"),
+                    resource.provider,
+                    resource.name,
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "{} {} to create, {} to update, {} to destroy{}",
+        bold("Plan:"),
+        green(&summary.create.to_string()),
+        yellow(&summary.update.to_string()),
+        red(&summary.remove.to_string()),
+        if summary.conflicts > 0 {
+            red(&format!(", {} conflicts", summary.conflicts))
+        } else {
+            ".".to_string()
+        }
+    );
+}
+
+fn print_state_initialized(project: &Project, state_path: &Path) {
+    println!(
+        "{} {}",
+        dim("Initializing state:"),
+        dim(&display_source(project, state_path))
+    );
+    println!();
+}
+
+fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
+    let summary = summarize_plan(plan);
+    if summary.conflicts > 0 {
+        bail!(
+            "plan has {} conflict(s); refusing to apply",
+            summary.conflicts
+        )
+    }
+
+    let tracked = track_noop_resources(plan, state);
+
+    if summary.create + summary.update + summary.remove == 0 {
+        if tracked > 0 {
+            println!();
+            println!("{} {} resources tracked.", bold("State updated:"), tracked);
+        }
+        return Ok(());
+    }
+
+    println!();
+    println!("{}", bold("Applying:"));
+
     for step in plan {
         match step {
-            PlanStep::Create(resource) => println!(
-                "  + {} -> {}",
-                resource.target.display(),
-                resource.source.display()
-            ),
-            PlanStep::Update(resource) => println!(
-                "  ~ {} -> {}",
-                resource.target.display(),
-                resource.source.display()
-            ),
-            PlanStep::Remove(resource) => println!("  - {}", resource.target.display()),
-            PlanStep::Noop(resource) => println!("  = {}", resource.target.display()),
-            PlanStep::Conflict { resource, reason } => {
-                println!("  ! {} ({reason})", resource.target.display())
+            PlanStep::SymlinkCreate(resource) => apply_with_status(
+                "Creating",
+                "Creation",
+                &format!("symlink.{}", display_target(&resource.target)),
+                || apply_symlink(resource, state),
+            )?,
+            PlanStep::SymlinkUpdate(resource) => apply_with_status(
+                "Updating",
+                "Update",
+                &format!("symlink.{}", display_target(&resource.target)),
+                || apply_symlink(resource, state),
+            )?,
+            PlanStep::SymlinkRemove { target, source } => {
+                let resource = StateResource::Symlink {
+                    target: target.clone(),
+                    source: source.clone(),
+                };
+                apply_with_status(
+                    "Destroying",
+                    "Destroy",
+                    &format!("symlink.{}", display_target(target)),
+                    || remove_symlink(&resource, state),
+                )?
             }
+            PlanStep::PackageCreate(resource) => apply_with_status(
+                "Installing",
+                "Install",
+                &format!("package.{}.{}", resource.provider, resource.name),
+                || install_package(resource, state),
+            )?,
+            PlanStep::PackageRemove(resource) => apply_with_status(
+                "Removing",
+                "Remove",
+                &format!("package.{}.{}", resource.provider, resource.name),
+                || remove_package(resource, state),
+            )?,
+            PlanStep::SymlinkNoop(resource) => {
+                state
+                    .resources
+                    .insert(symlink_id_for(resource), state_symlink(resource));
+            }
+            PlanStep::PackageNoop(resource) => {
+                state
+                    .resources
+                    .insert(package_id_for(resource), state_package(resource));
+            }
+            PlanStep::SymlinkConflict { .. } | PlanStep::PackageConflict { .. } => unreachable!(),
+        }
+    }
+
+    println!();
+    println!(
+        "{} {} created, {} updated, {} destroyed.",
+        bold("Apply complete:"),
+        green(&summary.create.to_string()),
+        yellow(&summary.update.to_string()),
+        red(&summary.remove.to_string()),
+    );
+
+    Ok(())
+}
+
+fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
+    let mut tracked = 0;
+    for step in plan {
+        match step {
+            PlanStep::SymlinkNoop(resource) => {
+                if state
+                    .resources
+                    .insert(symlink_id_for(resource), state_symlink(resource))
+                    .is_none()
+                {
+                    tracked += 1;
+                }
+            }
+            PlanStep::PackageNoop(resource) => {
+                if state
+                    .resources
+                    .insert(package_id_for(resource), state_package(resource))
+                    .is_none()
+                {
+                    tracked += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    tracked
+}
+
+fn apply_symlink(resource: &SymlinkResource, state: &mut State) -> Result<()> {
+    if let Some(parent) = resource.target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if resource.target.exists() || fs::symlink_metadata(&resource.target).is_ok() {
+        fs::remove_file(&resource.target)?;
+    }
+    unix_fs::symlink(&resource.source, &resource.target).with_context(|| {
+        format!(
+            "failed to symlink {} -> {}",
+            resource.target.display(),
+            resource.source.display()
+        )
+    })?;
+    state
+        .resources
+        .insert(symlink_id_for(resource), state_symlink(resource));
+    Ok(())
+}
+
+fn remove_symlink(resource: &StateResource, state: &mut State) -> Result<()> {
+    let StateResource::Symlink { target, source } = resource else {
+        return Ok(());
+    };
+    if fs::symlink_metadata(target)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        let current = fs::read_link(target)?;
+        let current = resolve_symlink_target(target, &current);
+        if same_path(&current, source) {
+            fs::remove_file(target)?;
+        }
+    }
+    state
+        .resources
+        .remove(&format!("symlink:{}", target.display()));
+    Ok(())
+}
+
+fn install_package(resource: &PackageResource, state: &mut State) -> Result<()> {
+    match resource.provider.as_str() {
+        "paru" => {
+            let status = ProcessCommand::new("paru")
+                .arg("-S")
+                .arg("--needed")
+                .arg(&resource.name)
+                .status()
+                .with_context(|| "failed to run paru")?;
+            if !status.success() {
+                bail!("paru failed to install {}", resource.name);
+            }
+        }
+        provider => bail!("unsupported package provider: {provider}"),
+    }
+    state
+        .resources
+        .insert(package_id_for(resource), state_package(resource));
+    Ok(())
+}
+
+fn remove_package(resource: &PackageResource, state: &mut State) -> Result<()> {
+    match resource.provider.as_str() {
+        "paru" => {
+            let status = ProcessCommand::new("paru")
+                .arg("-Rns")
+                .arg(&resource.name)
+                .status()
+                .with_context(|| "failed to run paru")?;
+            if !status.success() {
+                bail!("paru failed to remove {}", resource.name);
+            }
+        }
+        provider => bail!("unsupported package provider: {provider}"),
+    }
+    state.resources.remove(&package_id_for(resource));
+    Ok(())
+}
+
+fn apply_with_status(
+    action: &str,
+    noun: &str,
+    id: &str,
+    apply: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    println!("  {id}: {}...", dim(action));
+    match apply() {
+        Ok(()) => {
+            println!("  {id}: {}", green(&format!("{noun} complete")));
+            Ok(())
+        }
+        Err(error) => {
+            println!("  {id}: {}", red(&format!("{noun} failed")));
+            Err(error)
         }
     }
 }
 
-fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
-    let conflicts = plan
-        .iter()
-        .filter(|step| matches!(step, PlanStep::Conflict { .. }))
-        .count();
-    if conflicts > 0 {
-        bail!("plan has {conflicts} conflict(s); refusing to apply")
-    }
+fn colors_enabled() -> bool {
+    std::io::stdout().is_terminal()
+}
 
-    for step in plan {
-        match step {
-            PlanStep::Create(resource) | PlanStep::Update(resource) => {
-                if let Some(parent) = resource.target.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                if resource.target.exists() || fs::symlink_metadata(&resource.target).is_ok() {
-                    fs::remove_file(&resource.target)?;
-                }
-                unix_fs::symlink(&resource.source, &resource.target).with_context(|| {
-                    format!(
-                        "failed to symlink {} -> {}",
-                        resource.target.display(),
-                        resource.source.display()
-                    )
-                })?;
-                state.resources.insert(
-                    resource_id(resource),
-                    StateResource {
-                        kind: "symlink".to_string(),
-                        target: resource.target.clone(),
-                        source: resource.source.clone(),
-                    },
-                );
-            }
-            PlanStep::Remove(resource) => {
-                if fs::symlink_metadata(&resource.target)
-                    .map(|meta| meta.file_type().is_symlink())
-                    .unwrap_or(false)
-                {
-                    let current = fs::read_link(&resource.target)?;
-                    if same_path(&current, &resource.source) {
-                        fs::remove_file(&resource.target)?;
-                    }
-                }
-                state
-                    .resources
-                    .remove(&format!("symlink:{}", resource.target.display()));
-            }
-            PlanStep::Noop(resource) => {
-                state.resources.insert(
-                    resource_id(resource),
-                    StateResource {
-                        kind: "symlink".to_string(),
-                        target: resource.target.clone(),
-                        source: resource.source.clone(),
-                    },
-                );
-            }
-            PlanStep::Conflict { .. } => unreachable!(),
-        }
+fn green(value: &str) -> String {
+    if colors_enabled() {
+        value.green().to_string()
+    } else {
+        value.to_string()
     }
+}
 
-    Ok(())
+fn yellow(value: &str) -> String {
+    if colors_enabled() {
+        value.yellow().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn red(value: &str) -> String {
+    if colors_enabled() {
+        value.red().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn bold(value: &str) -> String {
+    if colors_enabled() {
+        value.bold().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn dim(value: &str) -> String {
+    if colors_enabled() {
+        value.dimmed().to_string()
+    } else {
+        value.to_string()
+    }
 }

@@ -1,68 +1,49 @@
 # dots documentation
 
-`dots` manages a dotfiles repository from Lua.
-
 ## Workflow
 
-Run from the dotfiles repo:
+Run from the dotfiles repository:
 
 ```sh
 dots plan
 dots apply
 ```
 
-`plan` shows the changes. `apply` performs them.
+`plan` refreshes local state and shows the diff. `apply` performs the pending
+changes and updates state.
 
 ## Config file
 
-`dots` searches upward from the current directory for `dots.lua` or
-`dots/init.lua`.
+`dots` searches upward from the current directory for `dots.lua`.
 
 ```lua
 dots.symlink("~/.config/nvim", ".config/nvim")
 dots.symlink("~/.zshrc", ".zshrc")
 ```
 
-## Symlinks
+The directory containing `dots.lua` is the project root. Relative source paths
+are resolved from that root.
 
-```lua
-dots.symlink(target, source)
+## Resources
+
+- [Symlinks](symlinks.md)
+- [Packages](packages.md)
+
+## State
+
+State is stored in `.dots/state.json` inside the project root.
+
+It records which resources are managed by `dots`. This lets `dots` destroy
+resources removed from config without touching unmanaged files.
+
+List tracked resources:
+
+```sh
+dots state list
 ```
 
-- `target` is where the symlink should exist.
-- `source` is the file or directory in the dotfiles repo.
-- `~` expands to `$HOME`.
-- relative source paths resolve from the repo root.
+Stop tracking a resource without changing the filesystem:
 
-Example:
-
-```lua
-dots.symlink("~/.config/nvim", ".config/nvim")
-```
-
-Creates:
-
-```text
-~/.config/nvim -> <dotfiles>/.config/nvim
-```
-
-## Packages
-
-Package management is planned next. The intended style is direct and explicit:
-
-```lua
-dots.pacman.install("bat", "btop", "fd", "ripgrep")
-dots.paru.install("neovim-nightly-bin", "noctalia-git")
-dots.brew.install("bat", "btop", "fd", "ripgrep")
-dots.brew.cask("ghostty", "brave-browser")
-```
-
-## Commands
-
-Generic commands will cover tools that do not need first-class providers:
-
-```lua
-dots.exec.once("tree-sitter-cli", "cargo install tree-sitter-cli", {
-  unless = "command -v tree-sitter",
-})
+```sh
+dots state forget ~/.config/nvim
 ```
