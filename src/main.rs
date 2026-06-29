@@ -1,16 +1,23 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io::IsTerminal;
-use std::os::unix::fs as unix_fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command as ProcessCommand, Stdio};
+mod package;
+mod platform;
+mod state;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use mlua::{Lua, Table, Value};
 use owo_colors::OwoColorize;
-use serde::{Deserialize, Serialize};
+use package::{
+    PackageProvider, PackageResource, package_installed, package_provider_available,
+    run_provider_command,
+};
+use platform::{platform_table, selected_profile};
+use state::{State, StateResource, load_state, save_state};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::IsTerminal;
+use std::os::unix::fs as unix_fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(name = "dots", version)]
@@ -69,20 +76,6 @@ struct SymlinkDeclaration {
 }
 
 #[derive(Debug, Clone)]
-struct PackageResource {
-    provider: String,
-    name: String,
-}
-
-#[derive(Debug, Clone)]
-struct PackageProvider {
-    available: String,
-    installed: String,
-    install: String,
-    remove: String,
-}
-
-#[derive(Debug, Clone)]
 enum PlanStep {
     SymlinkCreate(SymlinkResource),
     SymlinkUpdate(SymlinkResource),
@@ -116,20 +109,6 @@ struct PlanSummary {
     update: usize,
     remove: usize,
     conflicts: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
-enum StateResource {
-    #[serde(rename = "symlink")]
-    Symlink { target: PathBuf, source: PathBuf },
-    #[serde(rename = "package")]
-    Package { provider: String, name: String },
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct State {
-    resources: BTreeMap<String, StateResource>,
 }
 
 #[derive(Debug)]
@@ -175,111 +154,6 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn selected_profile(profile: Option<&str>) -> Result<String> {
-    if let Some(profile) = profile {
-        return Ok(profile.to_string());
-    }
-    if let Ok(profile) = std::env::var("DOTS_PROFILE") {
-        if !profile.is_empty() {
-            return Ok(profile);
-        }
-    }
-    hostname()
-        .or_else(|| std::env::var("USER").ok())
-        .context("could not determine default profile")
-}
-
-fn hostname() -> Option<String> {
-    if let Ok(hostname) = std::env::var("HOSTNAME") {
-        if !hostname.is_empty() {
-            return Some(hostname);
-        }
-    }
-    fs::read_to_string("/etc/hostname")
-        .ok()
-        .map(|hostname| hostname.trim().to_string())
-        .filter(|hostname| !hostname.is_empty())
-}
-
-fn platform_table(lua: &Lua) -> Result<Table> {
-    let table = lua.create_table()?;
-    let os = platform_os();
-    let os_release = if os == "linux" {
-        linux_os_release().unwrap_or_default()
-    } else {
-        BTreeMap::new()
-    };
-    let distro = os_release.get("ID").cloned();
-    let family = platform_family(os, &os_release);
-
-    table.set("system", format!("{}-{os}", std::env::consts::ARCH))?;
-    table.set("arch", std::env::consts::ARCH)?;
-    table.set("os", os)?;
-    table.set("hostname", hostname().unwrap_or_default())?;
-    table.set("distro", distro)?;
-    table.set("family", family)?;
-    Ok(table)
-}
-
-fn platform_os() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "darwin",
-        os => os,
-    }
-}
-
-fn platform_family(os: &str, os_release: &BTreeMap<String, String>) -> String {
-    match os {
-        "darwin" => "darwin".to_string(),
-        "linux" => linux_family(os_release),
-        os => os.to_string(),
-    }
-}
-
-fn linux_family(os_release: &BTreeMap<String, String>) -> String {
-    let id = os_release.get("ID").map(String::as_str).unwrap_or_default();
-    let id_like = os_release
-        .get("ID_LIKE")
-        .map(String::as_str)
-        .unwrap_or_default();
-    if id == "arch" || id_like.split_whitespace().any(|value| value == "arch") {
-        "arch".to_string()
-    } else if id == "debian"
-        || id == "ubuntu"
-        || id_like
-            .split_whitespace()
-            .any(|value| value == "debian" || value == "ubuntu")
-    {
-        "debian".to_string()
-    } else {
-        id.to_string()
-    }
-}
-
-fn linux_os_release() -> Option<BTreeMap<String, String>> {
-    let source = fs::read_to_string("/etc/os-release").ok()?;
-    let mut values = BTreeMap::new();
-    for line in source.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        values.insert(key.to_string(), unquote_os_release_value(value));
-    }
-    Some(values)
-}
-
-fn unquote_os_release_value(value: &str) -> String {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or(value)
-        .to_string()
 }
 
 fn find_project(file: Option<PathBuf>) -> Result<Project> {
@@ -642,23 +516,6 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("~"))
 }
 
-fn load_state(path: &Path) -> Result<State> {
-    let Some(source) = fs::read_to_string(path).ok() else {
-        return Ok(State::default());
-    };
-    Ok(serde_json::from_str(&source)?)
-}
-
-fn save_state(path: &Path, state: &State) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_string_pretty(state)?)?;
-    fs::rename(tmp, path)?;
-    Ok(())
-}
-
 fn run_state_command(
     project: &Project,
     state_path: &Path,
@@ -817,27 +674,6 @@ fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
     }
 
     Ok(plan)
-}
-
-fn package_provider_available(provider: &PackageProvider) -> Result<bool> {
-    run_provider_command(&provider.available, None, true)
-}
-
-fn package_installed(provider: &PackageProvider, resource: &PackageResource) -> Result<bool> {
-    run_provider_command(&provider.installed, Some(&resource.name), true)
-}
-
-fn run_provider_command(command: &str, package: Option<&str>, quiet: bool) -> Result<bool> {
-    let mut process = ProcessCommand::new("sh");
-    process.arg("-c").arg(command);
-    process.stdin(Stdio::null());
-    if let Some(package) = package {
-        process.env("DOTS_PACKAGE", package);
-    }
-    if quiet {
-        process.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-    Ok(process.status()?.success())
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
@@ -1278,13 +1114,6 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn os_release(values: &[(&str, &str)]) -> BTreeMap<String, String> {
-        values
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-            .collect()
-    }
-
     fn temp_project(config: &str) -> Project {
         let id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1304,38 +1133,6 @@ mod tests {
     fn missing_paths_are_not_the_same_path() {
         let base = std::env::temp_dir().join(format!("dots-missing-{}", std::process::id()));
         assert!(!same_path(&base.join("one"), &base.join("two")));
-    }
-
-    #[test]
-    fn detects_linux_package_family() {
-        assert_eq!(
-            platform_family("linux", &os_release(&[("ID", "arch")])),
-            "arch"
-        );
-        assert_eq!(
-            platform_family(
-                "linux",
-                &os_release(&[("ID", "ubuntu"), ("ID_LIKE", "debian")])
-            ),
-            "debian"
-        );
-        assert_eq!(
-            platform_family(
-                "linux",
-                &os_release(&[("ID", "pop"), ("ID_LIKE", "ubuntu debian")])
-            ),
-            "debian"
-        );
-    }
-
-    #[test]
-    fn darwin_family_is_darwin() {
-        assert_eq!(platform_family("darwin", &BTreeMap::new()), "darwin");
-    }
-
-    #[test]
-    fn explicit_profile_wins() {
-        assert_eq!(selected_profile(Some("work")).unwrap(), "work");
     }
 
     #[test]
