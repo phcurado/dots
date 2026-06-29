@@ -1,10 +1,10 @@
 mod package;
 mod platform;
 mod state;
+mod symlink;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use mlua::{Lua, Table, Value};
 use owo_colors::OwoColorize;
 use package::{
@@ -16,8 +16,12 @@ use state::{State, StateResource, load_state, save_state};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::IsTerminal;
-use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
+use symlink::{
+    SymlinkDeclaration, SymlinkResource, apply_symlink, expand_home, expand_symlink_declaration,
+    home_dir, remove_symlink, resolve_source, resolve_symlink_target, same_path, state_symlink,
+    symlink_id_for, symlink_matches,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "dots", version)]
@@ -60,19 +64,6 @@ struct Config {
     symlinks: Vec<SymlinkResource>,
     packages: Vec<PackageResource>,
     package_providers: BTreeMap<String, PackageProvider>,
-}
-
-#[derive(Debug, Clone)]
-struct SymlinkResource {
-    target: PathBuf,
-    source: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-struct SymlinkDeclaration {
-    target: PathBuf,
-    source: PathBuf,
-    ignore: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -418,104 +409,6 @@ fn table_strings(table: Option<Table>) -> mlua::Result<Vec<String>> {
     Ok(values)
 }
 
-fn expand_home(path: &str) -> PathBuf {
-    if path == "~" {
-        return home_dir();
-    }
-    if let Some(rest) = path.strip_prefix("~/") {
-        return home_dir().join(rest);
-    }
-    PathBuf::from(path)
-}
-
-fn resolve_source(root: &Path, source: &str) -> PathBuf {
-    let path = expand_home(source);
-    if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    }
-}
-
-fn expand_symlink_declaration(declaration: &SymlinkDeclaration) -> Result<Vec<SymlinkResource>> {
-    let target_is_directory = fs::symlink_metadata(&declaration.target)
-        .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-        .unwrap_or(false);
-    let should_expand =
-        declaration.source.is_dir() && (!declaration.ignore.is_empty() || target_is_directory);
-
-    if !should_expand {
-        return Ok(vec![SymlinkResource {
-            target: declaration.target.clone(),
-            source: declaration.source.clone(),
-        }]);
-    }
-
-    let ignore = build_ignore_set(&declaration.ignore)?;
-    let mut resources = Vec::new();
-    expand_symlink_dir(
-        &declaration.target,
-        &declaration.source,
-        Path::new(""),
-        &ignore,
-        &mut resources,
-    )?;
-    Ok(resources)
-}
-
-fn expand_symlink_dir(
-    target_root: &Path,
-    source_root: &Path,
-    relative: &Path,
-    ignore: &GlobSet,
-    resources: &mut Vec<SymlinkResource>,
-) -> Result<()> {
-    let source_dir = source_root.join(relative);
-    for entry in fs::read_dir(&source_dir)
-        .with_context(|| format!("failed to read {}", source_dir.display()))?
-    {
-        let entry = entry?;
-        let name = entry.file_name();
-        let relative = relative.join(name);
-        if ignore.is_match(&relative) {
-            continue;
-        }
-
-        let source = source_root.join(&relative);
-        let target = target_root.join(&relative);
-        let metadata = fs::symlink_metadata(&source)?;
-
-        if metadata.is_dir()
-            && fs::symlink_metadata(&target)
-                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-                .unwrap_or(false)
-        {
-            expand_symlink_dir(target_root, source_root, &relative, ignore, resources)?;
-        } else {
-            resources.push(SymlinkResource { target, source });
-        }
-    }
-    Ok(())
-}
-
-fn build_ignore_set(patterns: &[String]) -> Result<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    for pattern in patterns {
-        builder
-            .add(Glob::new(pattern).with_context(|| format!("invalid ignore pattern: {pattern}"))?);
-        if let Some(dir) = pattern.strip_suffix("/**") {
-            builder.add(Glob::new(dir).with_context(|| format!("invalid ignore pattern: {dir}"))?);
-        }
-    }
-    Ok(builder.build()?)
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("~"))
-}
-
 fn run_state_command(
     project: &Project,
     state_path: &Path,
@@ -676,52 +569,11 @@ fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
     Ok(plan)
 }
 
-fn same_path(left: &Path, right: &Path) -> bool {
-    if left == right {
-        return true;
-    }
-    match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
-fn symlink_matches(resource: &SymlinkResource) -> Result<bool> {
-    let Ok(meta) = fs::symlink_metadata(&resource.target) else {
-        return Ok(false);
-    };
-    if !meta.file_type().is_symlink() || !resource.source.exists() {
-        return Ok(false);
-    }
-    let current = fs::read_link(&resource.target)?;
-    let current = resolve_symlink_target(&resource.target, &current);
-    Ok(same_path(&current, &resource.source))
-}
-
-fn resolve_symlink_target(target: &Path, link: &Path) -> PathBuf {
-    if link.is_absolute() {
-        link.to_path_buf()
-    } else {
-        target.parent().unwrap_or_else(|| Path::new(".")).join(link)
-    }
-}
-
-fn state_symlink(resource: &SymlinkResource) -> StateResource {
-    StateResource::Symlink {
-        target: resource.target.clone(),
-        source: resource.source.clone(),
-    }
-}
-
 fn state_package(resource: &PackageResource) -> StateResource {
     StateResource::Package {
         provider: resource.provider.clone(),
         name: resource.name.clone(),
     }
-}
-
-fn symlink_id_for(resource: &SymlinkResource) -> String {
-    format!("symlink:{}", resource.target.display())
 }
 
 fn package_id_for(resource: &PackageResource) -> String {
@@ -974,46 +826,6 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
     tracked
 }
 
-fn apply_symlink(resource: &SymlinkResource, state: &mut State) -> Result<()> {
-    if let Some(parent) = resource.target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    if resource.target.exists() || fs::symlink_metadata(&resource.target).is_ok() {
-        fs::remove_file(&resource.target)?;
-    }
-    unix_fs::symlink(&resource.source, &resource.target).with_context(|| {
-        format!(
-            "failed to symlink {} -> {}",
-            resource.target.display(),
-            resource.source.display()
-        )
-    })?;
-    state
-        .resources
-        .insert(symlink_id_for(resource), state_symlink(resource));
-    Ok(())
-}
-
-fn remove_symlink(resource: &StateResource, state: &mut State) -> Result<()> {
-    let StateResource::Symlink { target, source } = resource else {
-        return Ok(());
-    };
-    if fs::symlink_metadata(target)
-        .map(|meta| meta.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        let current = fs::read_link(target)?;
-        let current = resolve_symlink_target(target, &current);
-        if same_path(&current, source) {
-            fs::remove_file(target)?;
-        }
-    }
-    state
-        .resources
-        .remove(&format!("symlink:{}", target.display()));
-    Ok(())
-}
-
 fn install_package(
     provider: &PackageProvider,
     resource: &PackageResource,
@@ -1127,12 +939,6 @@ mod tests {
             root,
             config: config_path,
         }
-    }
-
-    #[test]
-    fn missing_paths_are_not_the_same_path() {
-        let base = std::env::temp_dir().join(format!("dots-missing-{}", std::process::id()));
-        assert!(!same_path(&base.join("one"), &base.join("two")));
     }
 
     #[test]
