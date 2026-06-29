@@ -9,6 +9,9 @@ system.
 - use platform facts for OS and distro decisions
 - use profiles for host or persona decisions
 
+For larger configs, keep the branching in small Lua modules. See
+[Organizing a dotfiles repo](organization.md).
+
 ## Platform
 
 `dots.platform` is available while `dots.lua` is running:
@@ -20,7 +23,9 @@ end
 
 if dots.platform.family == "arch" then
   dots.paru.install({ "bat", "ripgrep" })
-elseif dots.platform.family == "debian" then
+end
+
+if dots.platform.family == "debian" then
   dots.apt.install({ "bat", "ripgrep" })
 end
 ```
@@ -40,7 +45,8 @@ The available fields are:
 `x86_64-linux` and `aarch64-darwin`.
 
 On Linux, `distro` and `family` come from `/etc/os-release`. Ubuntu and Debian
-both use `family = "debian"`; Arch uses `family = "arch"`.
+both use `family = "debian"`; Arch uses `family = "arch"`. macOS uses
+`family = "darwin"`.
 
 ## Profiles
 
@@ -50,7 +56,9 @@ share packages but use different Git identities.
 ```lua
 if dots.profile == "work" then
   dots.symlink("~/.gitconfig", "profiles/work/gitconfig")
-elseif dots.profile == "personal" then
+end
+
+if dots.profile == "personal" then
   dots.symlink("~/.gitconfig", "profiles/personal/gitconfig")
 end
 ```

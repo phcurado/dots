@@ -35,7 +35,9 @@ local common_packages = { "bat", "ripgrep" }
 if dots.platform.family == "arch" then
   dots.pacman.install({ "base-devel", "git", "paru" })
   dots.paru.install(common_packages)
-elseif dots.os == "macos" then
+end
+
+if dots.platform.family == "darwin" then
   dots.brew.tap({ "FelixKratz/formulae" })
   dots.brew.install(common_packages)
   dots.brew.install({ "wget", "sketchybar" })
@@ -53,9 +55,13 @@ Some package names are not portable. Keep those declarations separate:
 ```lua
 if dots.platform.family == "arch" then
   dots.paru.install({ "fd" })
-elseif dots.platform.family == "debian" then
+end
+
+if dots.platform.family == "debian" then
   dots.apt.install({ "fd-find" })
-elseif dots.os == "macos" then
+end
+
+if dots.platform.family == "darwin" then
   dots.brew.install({ "fd" })
 end
 ```

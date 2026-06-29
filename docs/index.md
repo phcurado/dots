@@ -17,6 +17,7 @@ or changing symlinks.
 
 - [Quick start](quick-start.md): create a small config and run the first plan.
 - [Install](install.md): install from a release or from source.
+- [Organization](organization.md): split a config with normal Lua modules.
 - [Platforms and profiles](platforms-and-profiles.md): share one repo across different machines.
 - [Symlinks](symlinks.md): put repo files where programs expect them.
 - [Packages](packages.md): install packages with `pacman`, `paru`, `apt`, or Homebrew.

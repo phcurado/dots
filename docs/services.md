@@ -10,7 +10,9 @@ Declare those services next to the rest of the machine setup:
 if dots.platform.family == "arch" then
   dots.systemd.enable({ "docker.service" })
   dots.systemd.start({ "docker.service" })
-elseif dots.os == "macos" then
+end
+
+if dots.platform.family == "darwin" then
   dots.brew.service.start({ "sketchybar", "borders" })
 end
 ```

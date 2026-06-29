@@ -42,7 +42,9 @@ local common_packages = { "bat", "ripgrep" }
 if dots.platform.family == "arch" then
   dots.pacman.install({ "base-devel", "git", "paru" })
   dots.paru.install(common_packages)
-elseif dots.os == "macos" then
+end
+
+if dots.platform.family == "darwin" then
   dots.brew.install(common_packages)
   dots.brew.install({ "wget" })
 end

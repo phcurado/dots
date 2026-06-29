@@ -558,6 +558,23 @@ mod tests {
     }
 
     #[test]
+    fn loads_repo_local_lua_modules() {
+        let project = temp_project(r#"require("dots.common")"#);
+        fs::create_dir_all(project.root.join("dots")).unwrap();
+        fs::write(
+            project.root.join("dots/common.lua"),
+            r#"dots.paru.install({ "bat" })"#,
+        )
+        .unwrap();
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.packages.len(), 1);
+        assert_eq!(config.packages[0].provider, "paru");
+        assert_eq!(config.packages[0].name, "bat");
+    }
+
+    #[test]
     fn duplicate_packages_are_deduped() {
         let project = temp_project(r#"dots.paru.install({ "bat", "bat" })"#);
 
