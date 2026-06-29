@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use mlua::{Lua, Table, Value};
 
+use crate::font::{FontResource, expand_font_source};
 use crate::package::{PackageProvider, PackageResource};
 use crate::plan::package_id_for;
 use crate::platform::platform_table;
@@ -20,6 +21,7 @@ pub(crate) struct Config {
     pub(crate) symlinks: Vec<SymlinkResource>,
     pub(crate) packages: Vec<PackageResource>,
     pub(crate) services: Vec<ServiceResource>,
+    pub(crate) fonts: Vec<FontResource>,
     pub(crate) package_providers: BTreeMap<String, PackageProvider>,
     pub(crate) service_providers: BTreeMap<String, ServiceProvider>,
 }
@@ -31,6 +33,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let package_providers = lua.create_table()?;
     let service_providers = lua.create_table()?;
     let services = lua.create_table()?;
+    let font_sources = lua.create_table()?;
     let dots = lua.create_table()?;
 
     let root = project.root.clone();
@@ -68,9 +71,18 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         Ok(())
     })?;
 
+    let collected_font_sources = font_sources.clone();
+    let fonts = lua.create_table()?;
+    let fonts_install = lua.create_function(move |_, source: Option<String>| {
+        collected_font_sources.raw_push(source.unwrap_or_else(|| "fonts".to_string()))?;
+        Ok(())
+    })?;
+    fonts.set("install", fonts_install)?;
+
     let platform = platform_table(&lua)?;
 
     dots.set("symlink", symlink)?;
+    dots.set("fonts", fonts)?;
     dots.set("profile", profile)?;
     dots.set("platform", platform)?;
     dots.set("root", project.root.display().to_string())?;
@@ -135,6 +147,11 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             name: item.get::<String>("name")?,
         });
     }
+    for source in font_sources.sequence_values::<String>() {
+        config
+            .fonts
+            .extend(expand_font_source(&project.root, Some(&source?))?);
+    }
     for pair in package_providers.pairs::<String, Table>() {
         let (name, item) = pair?;
         config.package_providers.insert(
@@ -192,6 +209,11 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     config
         .services
         .retain(|resource| service_ids.insert(crate::plan::service_id_for(resource)));
+
+    let mut font_ids = BTreeSet::new();
+    config
+        .fonts
+        .retain(|resource| font_ids.insert(crate::plan::font_id_for(resource)));
 
     Ok(())
 }
@@ -252,8 +274,18 @@ fn install_provider_api(
 
 fn load_builtin_lua(lua: &Lua) -> Result<()> {
     for (name, source) in [
-        ("dots packages", include_str!("lua/packages.lua")),
-        ("dots services", include_str!("lua/services.lua")),
+        (
+            "dots package pacman",
+            include_str!("lua/packages/pacman.lua"),
+        ),
+        ("dots package paru", include_str!("lua/packages/paru.lua")),
+        ("dots package apt", include_str!("lua/packages/apt.lua")),
+        ("dots package brew", include_str!("lua/packages/brew.lua")),
+        (
+            "dots service systemd",
+            include_str!("lua/services/systemd.lua"),
+        ),
+        ("dots service brew", include_str!("lua/services/brew.lua")),
     ] {
         lua.load(source).set_name(name).exec()?;
     }
@@ -514,6 +546,23 @@ mod tests {
         assert_eq!(config.packages[0].name, "FelixKratz/formulae");
         assert_eq!(config.packages[1].provider, "brew");
         assert_eq!(config.packages[1].name, "sketchybar");
+    }
+
+    #[test]
+    fn loads_default_fonts_folder() {
+        let project = temp_project(r#"dots.fonts.install()"#);
+        fs::create_dir_all(project.root.join("fonts/nested")).unwrap();
+        fs::write(project.root.join("fonts/runcat.ttf"), "font").unwrap();
+        fs::write(project.root.join("fonts/nested/readme.txt"), "nope").unwrap();
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.fonts.len(), 1);
+        assert_eq!(
+            config.fonts[0].source,
+            project.root.join("fonts/runcat.ttf")
+        );
+        assert!(config.fonts[0].target.ends_with("runcat.ttf"));
     }
 
     #[test]

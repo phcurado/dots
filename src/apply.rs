@@ -1,10 +1,13 @@
 use anyhow::{Result, bail};
 
+use crate::font::{FontResource, apply_font, refresh_font_cache, remove_font, state_font};
 use crate::output::{apply_with_status, bold, display_target, green, red, summarize_plan, yellow};
 use crate::package::{
     PackageProvider, PackageResource, package_provider_available, run_provider_command,
 };
-use crate::plan::{PlanStep, package_id_for, service_id_for, state_package, state_service};
+use crate::plan::{
+    PlanStep, font_id_for, package_id_for, service_id_for, state_package, state_service,
+};
 use crate::service::{ServiceProvider, ServiceResource, service_apply, service_remove};
 use crate::state::{State, StateResource};
 use crate::symlink::{apply_symlink, remove_symlink, state_symlink, symlink_id_for};
@@ -106,9 +109,33 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .insert(service_id_for(resource), state_service(resource));
             }
+            PlanStep::FontCreate(resource) | PlanStep::FontUpdate(resource) => apply_with_status(
+                "Installing",
+                "Install",
+                &format!("font.{}", display_target(&resource.target)),
+                || install_font(resource, state),
+            )?,
+            PlanStep::FontRemove { source, target } => {
+                let resource = crate::state::StateResource::Font {
+                    source: source.clone(),
+                    target: target.clone(),
+                };
+                apply_with_status(
+                    "Removing",
+                    "Remove",
+                    &format!("font.{}", display_target(target)),
+                    || uninstall_font(&resource, state),
+                )?
+            }
+            PlanStep::FontNoop(resource) => {
+                state
+                    .resources
+                    .insert(font_id_for(resource), state_font(resource));
+            }
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
-            | PlanStep::ServiceConflict { .. } => unreachable!(),
+            | PlanStep::ServiceConflict { .. }
+            | PlanStep::FontConflict { .. } => unreachable!(),
         }
     }
 
@@ -140,6 +167,10 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
                 .resources
                 .insert(service_id_for(resource), state_service(resource))
                 .is_none(),
+            PlanStep::FontNoop(resource) => state
+                .resources
+                .insert(font_id_for(resource), state_font(resource))
+                .is_none(),
             _ => false,
         };
         if inserted {
@@ -147,6 +178,18 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
         }
     }
     tracked
+}
+
+fn install_font(resource: &FontResource, state: &mut State) -> Result<()> {
+    apply_font(resource, state)?;
+    refresh_font_cache()?;
+    Ok(())
+}
+
+fn uninstall_font(resource: &StateResource, state: &mut State) -> Result<()> {
+    remove_font(resource, state)?;
+    refresh_font_cache()?;
+    Ok(())
 }
 
 fn apply_service(

@@ -18,6 +18,8 @@ pub(crate) enum StateResource {
         action: String,
         name: String,
     },
+    #[serde(rename = "font")]
+    Font { source: PathBuf, target: PathBuf },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

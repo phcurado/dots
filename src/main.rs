@@ -1,5 +1,6 @@
 mod apply;
 mod config;
+mod font;
 mod output;
 mod package;
 mod plan;
@@ -121,6 +122,7 @@ fn state_key_from_arg(resource: &str) -> String {
     if resource.starts_with("symlink:")
         || resource.starts_with("package:")
         || resource.starts_with("service:")
+        || resource.starts_with("font:")
     {
         resource.to_string()
     } else {

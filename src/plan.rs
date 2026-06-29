@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::config::Config;
+use crate::font::{FontResource, font_matches};
 use crate::package::{PackageProvider, PackageResource, package_installed};
 use crate::service::{ServiceProvider, ServiceResource, service_current};
 use crate::state::{State, StateResource};
@@ -50,6 +51,17 @@ pub(crate) enum PlanStep {
     ServiceNoop(ServiceResource),
     ServiceConflict {
         resource: ServiceResource,
+        reason: String,
+    },
+    FontCreate(FontResource),
+    FontUpdate(FontResource),
+    FontRemove {
+        source: PathBuf,
+        target: PathBuf,
+    },
+    FontNoop(FontResource),
+    FontConflict {
+        resource: FontResource,
         reason: String,
     },
 }
@@ -132,6 +144,28 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    for resource in &config.fonts {
+        let id = font_id_for(resource);
+        declared.insert(id.clone());
+        let owned = state.resources.contains_key(&id);
+
+        if !resource.source.exists() {
+            plan.push(PlanStep::FontConflict {
+                resource: resource.clone(),
+                reason: format!("source does not exist: {}", resource.source.display()),
+            });
+            continue;
+        }
+
+        if font_matches(resource)? {
+            plan.push(PlanStep::FontNoop(resource.clone()));
+        } else if owned && resource.target.exists() {
+            plan.push(PlanStep::FontUpdate(resource.clone()));
+        } else {
+            plan.push(PlanStep::FontCreate(resource.clone()));
+        }
+    }
+
     for resource in &config.services {
         let id = service_id_for(resource);
         declared.insert(id.clone());
@@ -161,6 +195,10 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             StateResource::Symlink { target, source } => plan.push(PlanStep::SymlinkRemove {
                 target: target.clone(),
                 source: source.clone(),
+            }),
+            StateResource::Font { source, target } => plan.push(PlanStep::FontRemove {
+                source: source.clone(),
+                target: target.clone(),
             }),
             StateResource::Package { provider, name } => {
                 let resource = PackageResource {
@@ -236,6 +274,10 @@ pub(crate) fn service_id_for(resource: &ServiceResource) -> String {
         resource.action.as_str(),
         resource.name
     )
+}
+
+pub(crate) fn font_id_for(resource: &FontResource) -> String {
+    format!("font:{}", resource.target.display())
 }
 
 #[cfg(test)]

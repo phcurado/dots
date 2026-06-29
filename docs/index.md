@@ -13,6 +13,7 @@ The docs match the current `main` branch.
 - [Symlinks](symlinks.md): link files and directories from the repo into `$HOME`.
 - [Packages](packages.md): use `pacman`, `paru`, `apt`, `brew`, or your own package provider.
 - [Services](services.md): manage systemd and Homebrew services.
+- [Fonts](fonts.md): install local fonts on Linux and macOS.
 - [State](state.md): inspect or forget resources tracked by `dots`.
 - [Release](release.md): tag-based GitHub releases.
 

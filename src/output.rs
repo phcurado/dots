@@ -44,15 +44,21 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
         match step {
             PlanStep::SymlinkCreate(_)
             | PlanStep::PackageCreate { .. }
-            | PlanStep::ServiceCreate { .. } => summary.create += 1,
-            PlanStep::SymlinkUpdate(_) => summary.update += 1,
+            | PlanStep::ServiceCreate { .. }
+            | PlanStep::FontCreate(_) => summary.create += 1,
+            PlanStep::SymlinkUpdate(_) | PlanStep::FontUpdate(_) => summary.update += 1,
             PlanStep::SymlinkRemove { .. }
             | PlanStep::PackageRemove { .. }
-            | PlanStep::ServiceRemove { .. } => summary.remove += 1,
+            | PlanStep::ServiceRemove { .. }
+            | PlanStep::FontRemove { .. } => summary.remove += 1,
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
-            | PlanStep::ServiceConflict { .. } => summary.conflicts += 1,
-            PlanStep::SymlinkNoop(_) | PlanStep::PackageNoop(_) | PlanStep::ServiceNoop(_) => {}
+            | PlanStep::ServiceConflict { .. }
+            | PlanStep::FontConflict { .. } => summary.conflicts += 1,
+            PlanStep::SymlinkNoop(_)
+            | PlanStep::PackageNoop(_)
+            | PlanStep::ServiceNoop(_)
+            | PlanStep::FontNoop(_) => {}
         }
     }
     summary
@@ -136,6 +142,41 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep]) {
         }
     }
 
+    let has_fonts = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::FontCreate(_)
+                | PlanStep::FontUpdate(_)
+                | PlanStep::FontRemove { .. }
+                | PlanStep::FontConflict { .. }
+        )
+    });
+    if has_fonts {
+        if has_symlinks || has_packages {
+            println!();
+        }
+        println!("{}", bold("Fonts:"));
+        for step in plan {
+            match step {
+                PlanStep::FontCreate(resource) => {
+                    println!("  {} {}", green("+"), display_target(&resource.target))
+                }
+                PlanStep::FontUpdate(resource) => {
+                    println!("  {} {}", yellow("~"), display_target(&resource.target))
+                }
+                PlanStep::FontRemove { target, .. } => {
+                    println!("  {} {}", red("-"), display_target(target))
+                }
+                PlanStep::FontConflict { resource, reason } => println!(
+                    "  {} {} ({reason})",
+                    red("!"),
+                    display_target(&resource.target)
+                ),
+                _ => {}
+            }
+        }
+    }
+
     let has_services = plan.iter().any(|step| {
         matches!(
             step,
@@ -145,7 +186,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep]) {
         )
     });
     if has_services {
-        if has_symlinks || has_packages {
+        if has_symlinks || has_packages || has_fonts {
             println!();
         }
         println!("{}", bold("Services:"));
@@ -214,6 +255,7 @@ pub(crate) fn print_state(project: &Project, state: &State) {
                 action,
                 name,
             } => println!("  service {provider} {action} {name}"),
+            StateResource::Font { target, .. } => println!("  font {}", display_target(target)),
         }
         println!("    {}", dim(id));
     }
