@@ -1,12 +1,22 @@
 # Packages
 
-`dots.paru.install(...)` declares Arch packages managed through `paru`.
+Package declarations use provider namespaces.
 
 ```lua
-dots.paru.install("bat", "ripgrep", "tmux")
+dots.paru.install({ "bat", "ripgrep" })
+dots.pacman.install({ "base-devel", "git" })
+dots.apt.install({ "bat", "ripgrep" })
 ```
 
-You can also pass a Lua table:
+The built-in package providers are:
+
+- `paru`
+- `pacman`
+- `apt`
+
+## Tables
+
+Package install takes a Lua table:
 
 ```lua
 local common_pkg = {
@@ -42,16 +52,23 @@ Packages:
 Plan: 0 to create, 0 to update, 1 to destroy.
 ```
 
-## Apply behavior
+Installed packages are not tracked by `dots plan` alone. Run `dots apply` to
+record declared packages as managed.
 
-Create uses:
+## Custom providers
 
-```sh
-paru -S --needed <package>
+Package providers can be defined in Lua:
+
+```lua
+dots.provider.package("cargo", {
+  available = "command -v cargo >/dev/null",
+  installed = "cargo install --list | grep -q \"^$DOTS_PACKAGE \"",
+  install = "cargo install \"$DOTS_PACKAGE\"",
+  remove = "cargo uninstall \"$DOTS_PACKAGE\"",
+})
+
+dots.cargo.install({ "tree-sitter-cli" })
 ```
 
-Destroy uses:
-
-```sh
-paru -Rns <package>
-```
+Provider commands run through `sh -c`. The package name is available as the
+`DOTS_PACKAGE` environment variable.

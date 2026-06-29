@@ -48,6 +48,7 @@ enum StateCommand {
 struct Config {
     symlinks: Vec<SymlinkResource>,
     packages: Vec<PackageResource>,
+    package_providers: BTreeMap<String, PackageProvider>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +71,14 @@ struct PackageResource {
 }
 
 #[derive(Debug, Clone)]
+struct PackageProvider {
+    available: String,
+    installed: String,
+    install: String,
+    remove: String,
+}
+
+#[derive(Debug, Clone)]
 enum PlanStep {
     SymlinkCreate(SymlinkResource),
     SymlinkUpdate(SymlinkResource),
@@ -82,8 +91,14 @@ enum PlanStep {
         resource: SymlinkResource,
         reason: String,
     },
-    PackageCreate(PackageResource),
-    PackageRemove(PackageResource),
+    PackageCreate {
+        resource: PackageResource,
+        provider: PackageProvider,
+    },
+    PackageRemove {
+        resource: PackageResource,
+        provider: PackageProvider,
+    },
     PackageNoop(PackageResource),
     PackageConflict {
         resource: PackageResource,
@@ -185,6 +200,7 @@ fn load_config(project: &Project) -> Result<Config> {
     let lua = Lua::new();
     let symlinks = lua.create_table()?;
     let packages = lua.create_table()?;
+    let package_providers = lua.create_table()?;
     let dots = lua.create_table()?;
 
     let root = project.root.clone();
@@ -222,23 +238,11 @@ fn load_config(project: &Project) -> Result<Config> {
         Ok(())
     })?;
 
-    let collected_packages = packages.clone();
-    let paru = lua.create_table()?;
-    let paru_install = lua.create_function(move |lua, args: mlua::MultiValue| {
-        for name in package_names_from_args(args)? {
-            let item = lua.create_table()?;
-            item.set("provider", "paru")?;
-            item.set("name", name)?;
-            collected_packages.raw_push(item)?;
-        }
-        Ok(())
-    })?;
-    paru.set("install", paru_install)?;
-
     dots.set("symlink", symlink)?;
-    dots.set("paru", paru)?;
     dots.set("root", project.root.display().to_string())?;
     dots.set("os", std::env::consts::OS)?;
+
+    install_provider_api(&lua, &dots, package_providers.clone(), packages.clone())?;
 
     let package: Table = lua.globals().get("package")?;
     let preload: Table = package.get("preload")?;
@@ -250,6 +254,7 @@ fn load_config(project: &Project) -> Result<Config> {
     lua.globals().set("dots", dots)?;
 
     install_package_path(&lua, &project.root)?;
+    load_builtin_lua(&lua)?;
 
     let source = fs::read_to_string(&project.config)
         .with_context(|| format!("failed to read {}", project.config.display()))?;
@@ -275,6 +280,18 @@ fn load_config(project: &Project) -> Result<Config> {
             provider: item.get::<String>("provider")?,
             name: item.get::<String>("name")?,
         });
+    }
+    for pair in package_providers.pairs::<String, Table>() {
+        let (name, item) = pair?;
+        config.package_providers.insert(
+            name,
+            PackageProvider {
+                available: item.get::<String>("available")?,
+                installed: item.get::<String>("installed")?,
+                install: item.get::<String>("install")?,
+                remove: item.get::<String>("remove")?,
+            },
+        );
     }
     dedupe_config(&mut config)?;
     Ok(config)
@@ -305,6 +322,74 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     config.packages = packages.into_values().collect();
 
     Ok(())
+}
+
+fn install_provider_api(lua: &Lua, dots: &Table, providers: Table, packages: Table) -> Result<()> {
+    let provider_api = lua.create_table()?;
+    let dots_for_provider = dots.clone();
+    let package = lua.create_function(move |lua, (name, spec): (String, Table)| {
+        let provider = PackageProvider {
+            available: spec.get("available")?,
+            installed: spec.get("installed")?,
+            install: spec.get("install")?,
+            remove: spec.get("remove")?,
+        };
+        register_package_provider(
+            lua,
+            &dots_for_provider,
+            &providers,
+            packages.clone(),
+            &name,
+            provider,
+        )
+        .map_err(mlua::Error::external)
+    })?;
+    provider_api.set("package", package)?;
+    dots.set("provider", provider_api)?;
+    Ok(())
+}
+
+fn load_builtin_lua(lua: &Lua) -> Result<()> {
+    lua.load(include_str!("lua/prelude.lua"))
+        .set_name("dots builtin prelude")
+        .exec()?;
+    Ok(())
+}
+
+fn register_package_provider(
+    lua: &Lua,
+    dots: &Table,
+    providers: &Table,
+    packages: Table,
+    name: &str,
+    provider: PackageProvider,
+) -> Result<()> {
+    let spec = lua.create_table()?;
+    spec.set("available", provider.available)?;
+    spec.set("installed", provider.installed)?;
+    spec.set("install", provider.install)?;
+    spec.set("remove", provider.remove)?;
+    providers.set(name, spec)?;
+    dots.set(
+        name,
+        package_provider_table(lua, packages, name.to_string())?,
+    )?;
+    Ok(())
+}
+
+fn package_provider_table(lua: &Lua, packages: Table, provider: String) -> Result<Table> {
+    let table = lua.create_table()?;
+    let install = lua.create_function(move |lua, package_list: Table| {
+        for name in table_strings(Some(package_list))? {
+            let item = lua.create_table()?;
+            item.set("provider", provider.clone())?;
+            item.set("name", name)?;
+            packages.raw_push(item)?;
+        }
+        Ok(())
+    })?;
+    table.set("install", install)?;
+    Ok(table)
 }
 
 fn install_package_path(lua: &Lua, root: &Path) -> Result<()> {
@@ -343,40 +428,6 @@ fn table_strings(table: Option<Table>) -> mlua::Result<Vec<String>> {
         }
     }
     Ok(values)
-}
-
-fn package_names_from_args(args: mlua::MultiValue) -> mlua::Result<Vec<String>> {
-    let mut names = Vec::new();
-    for value in args {
-        match value {
-            Value::String(name) => names.push(name.to_string_lossy()),
-            Value::Table(table) => {
-                for value in table.sequence_values::<Value>() {
-                    names.push(value_to_package_name(value?)?);
-                }
-            }
-            other => {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "expected package name or list of package names, got {other:?}"
-                )));
-            }
-        }
-    }
-    if names.is_empty() {
-        return Err(mlua::Error::RuntimeError(
-            "expected at least one package name".to_string(),
-        ));
-    }
-    Ok(names)
-}
-
-fn value_to_package_name(value: Value) -> mlua::Result<String> {
-    match value {
-        Value::String(name) => Ok(name.to_string_lossy()),
-        other => Err(mlua::Error::RuntimeError(format!(
-            "package name must be a string, got {other:?}"
-        ))),
-    }
 }
 
 fn expand_home(path: &str) -> PathBuf {
@@ -606,7 +657,14 @@ fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
         let id = package_id_for(resource);
         declared.insert(id.clone());
 
-        if !package_provider_available(&resource.provider) {
+        let Some(provider) = config.package_providers.get(&resource.provider) else {
+            plan.push(PlanStep::PackageConflict {
+                resource: resource.clone(),
+                reason: format!("{} provider is not configured", resource.provider),
+            });
+            continue;
+        };
+        if !package_provider_available(provider)? {
             plan.push(PlanStep::PackageConflict {
                 resource: resource.clone(),
                 reason: format!("{} is not available", resource.provider),
@@ -614,10 +672,13 @@ fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
             continue;
         }
 
-        if package_installed(resource)? {
+        if package_installed(provider, resource)? {
             plan.push(PlanStep::PackageNoop(resource.clone()));
         } else {
-            plan.push(PlanStep::PackageCreate(resource.clone()));
+            plan.push(PlanStep::PackageCreate {
+                resource: resource.clone(),
+                provider: provider.clone(),
+            });
         }
     }
 
@@ -631,10 +692,20 @@ fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
                 source: source.clone(),
             }),
             StateResource::Package { provider, name } => {
-                plan.push(PlanStep::PackageRemove(PackageResource {
+                let resource = PackageResource {
                     provider: provider.clone(),
                     name: name.clone(),
-                }))
+                };
+                match config.package_providers.get(provider) {
+                    Some(provider) => plan.push(PlanStep::PackageRemove {
+                        resource,
+                        provider: provider.clone(),
+                    }),
+                    None => plan.push(PlanStep::PackageConflict {
+                        resource,
+                        reason: format!("{provider} provider is not configured"),
+                    }),
+                }
             }
         }
     }
@@ -642,33 +713,25 @@ fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
     Ok(plan)
 }
 
-fn package_provider_available(provider: &str) -> bool {
-    match provider {
-        "paru" => ProcessCommand::new("paru")
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false),
-        _ => false,
-    }
+fn package_provider_available(provider: &PackageProvider) -> Result<bool> {
+    run_provider_command(&provider.available, None, true)
 }
 
-fn package_installed(resource: &PackageResource) -> Result<bool> {
-    match resource.provider.as_str() {
-        "paru" => Ok(ProcessCommand::new("paru")
-            .arg("-Q")
-            .arg(&resource.name)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .with_context(|| "failed to query paru")?
-            .success()),
-        provider => bail!("unsupported package provider: {provider}"),
+fn package_installed(provider: &PackageProvider, resource: &PackageResource) -> Result<bool> {
+    run_provider_command(&provider.installed, Some(&resource.name), true)
+}
+
+fn run_provider_command(command: &str, package: Option<&str>, quiet: bool) -> Result<bool> {
+    let mut process = ProcessCommand::new("sh");
+    process.arg("-c").arg(command);
+    process.stdin(Stdio::null());
+    if let Some(package) = package {
+        process.env("DOTS_PACKAGE", package);
     }
+    if quiet {
+        process.stdout(Stdio::null()).stderr(Stdio::null());
+    }
+    Ok(process.status()?.success())
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
@@ -748,9 +811,9 @@ fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
     let mut summary = PlanSummary::default();
     for step in plan {
         match step {
-            PlanStep::SymlinkCreate(_) | PlanStep::PackageCreate(_) => summary.create += 1,
+            PlanStep::SymlinkCreate(_) | PlanStep::PackageCreate { .. } => summary.create += 1,
             PlanStep::SymlinkUpdate(_) => summary.update += 1,
-            PlanStep::SymlinkRemove { .. } | PlanStep::PackageRemove(_) => summary.remove += 1,
+            PlanStep::SymlinkRemove { .. } | PlanStep::PackageRemove { .. } => summary.remove += 1,
             PlanStep::SymlinkConflict { .. } | PlanStep::PackageConflict { .. } => {
                 summary.conflicts += 1
             }
@@ -809,8 +872,8 @@ fn print_plan(project: &Project, plan: &[PlanStep]) {
     let has_packages = plan.iter().any(|step| {
         matches!(
             step,
-            PlanStep::PackageCreate(_)
-                | PlanStep::PackageRemove(_)
+            PlanStep::PackageCreate { .. }
+                | PlanStep::PackageRemove { .. }
                 | PlanStep::PackageConflict { .. }
         )
     });
@@ -821,10 +884,10 @@ fn print_plan(project: &Project, plan: &[PlanStep]) {
         println!("{}", bold("Packages:"));
         for step in plan {
             match step {
-                PlanStep::PackageCreate(resource) => {
+                PlanStep::PackageCreate { resource, .. } => {
                     println!("  {} {} {}", green("+"), resource.provider, resource.name,)
                 }
-                PlanStep::PackageRemove(resource) => {
+                PlanStep::PackageRemove { resource, .. } => {
                     println!("  {} {} {}", red("-"), resource.provider, resource.name,)
                 }
                 PlanStep::PackageConflict { resource, reason } => println!(
@@ -910,17 +973,17 @@ fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     || remove_symlink(&resource, state),
                 )?
             }
-            PlanStep::PackageCreate(resource) => apply_with_status(
+            PlanStep::PackageCreate { resource, provider } => apply_with_status(
                 "Installing",
                 "Install",
                 &format!("package.{}.{}", resource.provider, resource.name),
-                || install_package(resource, state),
+                || install_package(provider, resource, state),
             )?,
-            PlanStep::PackageRemove(resource) => apply_with_status(
+            PlanStep::PackageRemove { resource, provider } => apply_with_status(
                 "Removing",
                 "Remove",
                 &format!("package.{}.{}", resource.provider, resource.name),
-                || remove_package(resource, state),
+                || remove_package(provider, resource, state),
             )?,
             PlanStep::SymlinkNoop(resource) => {
                 state
@@ -1016,20 +1079,13 @@ fn remove_symlink(resource: &StateResource, state: &mut State) -> Result<()> {
     Ok(())
 }
 
-fn install_package(resource: &PackageResource, state: &mut State) -> Result<()> {
-    match resource.provider.as_str() {
-        "paru" => {
-            let status = ProcessCommand::new("paru")
-                .arg("-S")
-                .arg("--needed")
-                .arg(&resource.name)
-                .status()
-                .with_context(|| "failed to run paru")?;
-            if !status.success() {
-                bail!("paru failed to install {}", resource.name);
-            }
-        }
-        provider => bail!("unsupported package provider: {provider}"),
+fn install_package(
+    provider: &PackageProvider,
+    resource: &PackageResource,
+    state: &mut State,
+) -> Result<()> {
+    if !run_provider_command(&provider.install, Some(&resource.name), false)? {
+        bail!("{} failed to install {}", resource.provider, resource.name);
     }
     state
         .resources
@@ -1037,19 +1093,13 @@ fn install_package(resource: &PackageResource, state: &mut State) -> Result<()> 
     Ok(())
 }
 
-fn remove_package(resource: &PackageResource, state: &mut State) -> Result<()> {
-    match resource.provider.as_str() {
-        "paru" => {
-            let status = ProcessCommand::new("paru")
-                .arg("-Rns")
-                .arg(&resource.name)
-                .status()
-                .with_context(|| "failed to run paru")?;
-            if !status.success() {
-                bail!("paru failed to remove {}", resource.name);
-            }
-        }
-        provider => bail!("unsupported package provider: {provider}"),
+fn remove_package(
+    provider: &PackageProvider,
+    resource: &PackageResource,
+    state: &mut State,
+) -> Result<()> {
+    if !run_provider_command(&provider.remove, Some(&resource.name), false)? {
+        bail!("{} failed to remove {}", resource.provider, resource.name);
     }
     state.resources.remove(&package_id_for(resource));
     Ok(())
