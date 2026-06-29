@@ -1,0 +1,242 @@
+use std::io::IsTerminal;
+use std::path::Path;
+
+use anyhow::Result;
+use owo_colors::OwoColorize;
+
+use crate::plan::PlanStep;
+use crate::project::Project;
+use crate::state::{State, StateResource};
+use crate::symlink::home_dir;
+
+#[derive(Debug, Default)]
+pub(crate) struct PlanSummary {
+    pub(crate) create: usize,
+    pub(crate) update: usize,
+    pub(crate) remove: usize,
+    pub(crate) conflicts: usize,
+}
+
+pub(crate) fn display_target(path: &Path) -> String {
+    let home = home_dir();
+    if path == home {
+        return "~".to_string();
+    }
+    if let Ok(rest) = path.strip_prefix(&home) {
+        return format!("~/{}", rest.display());
+    }
+    path.display().to_string()
+}
+
+pub(crate) fn display_source(project: &Project, path: &Path) -> String {
+    if let Ok(rest) = path.strip_prefix(&project.root) {
+        if rest.as_os_str().is_empty() {
+            return ".".to_string();
+        }
+        return rest.display().to_string();
+    }
+    display_target(path)
+}
+
+pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
+    let mut summary = PlanSummary::default();
+    for step in plan {
+        match step {
+            PlanStep::SymlinkCreate(_) | PlanStep::PackageCreate { .. } => summary.create += 1,
+            PlanStep::SymlinkUpdate(_) => summary.update += 1,
+            PlanStep::SymlinkRemove { .. } | PlanStep::PackageRemove { .. } => summary.remove += 1,
+            PlanStep::SymlinkConflict { .. } | PlanStep::PackageConflict { .. } => {
+                summary.conflicts += 1
+            }
+            PlanStep::SymlinkNoop(_) | PlanStep::PackageNoop(_) => {}
+        }
+    }
+    summary
+}
+
+pub(crate) fn print_plan(project: &Project, plan: &[PlanStep]) {
+    let summary = summarize_plan(plan);
+    let has_changes = summary.create + summary.update + summary.remove + summary.conflicts > 0;
+    if !has_changes {
+        println!("{}", dim("No changes."));
+        return;
+    }
+
+    let has_symlinks = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::SymlinkCreate(_)
+                | PlanStep::SymlinkUpdate(_)
+                | PlanStep::SymlinkRemove { .. }
+                | PlanStep::SymlinkConflict { .. }
+        )
+    });
+    if has_symlinks {
+        println!("{}", bold("Symlinks:"));
+        for step in plan {
+            match step {
+                PlanStep::SymlinkCreate(resource) => println!(
+                    "  {} symlink {} -> {}",
+                    green("+"),
+                    display_target(&resource.target),
+                    display_source(project, &resource.source),
+                ),
+                PlanStep::SymlinkUpdate(resource) => println!(
+                    "  {} symlink {} -> {}",
+                    yellow("~"),
+                    display_target(&resource.target),
+                    display_source(project, &resource.source),
+                ),
+                PlanStep::SymlinkRemove { target, .. } => {
+                    println!("  {} symlink {}", red("-"), display_target(target))
+                }
+                PlanStep::SymlinkConflict { resource, reason } => println!(
+                    "  {} symlink {} ({reason})",
+                    red("!"),
+                    display_target(&resource.target)
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    let has_packages = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::PackageCreate { .. }
+                | PlanStep::PackageRemove { .. }
+                | PlanStep::PackageConflict { .. }
+        )
+    });
+    if has_packages {
+        if has_symlinks {
+            println!();
+        }
+        println!("{}", bold("Packages:"));
+        for step in plan {
+            match step {
+                PlanStep::PackageCreate { resource, .. } => {
+                    println!("  {} {} {}", green("+"), resource.provider, resource.name,)
+                }
+                PlanStep::PackageRemove { resource, .. } => {
+                    println!("  {} {} {}", red("-"), resource.provider, resource.name,)
+                }
+                PlanStep::PackageConflict { resource, reason } => println!(
+                    "  {} {} {} ({reason})",
+                    red("!"),
+                    resource.provider,
+                    resource.name,
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "{} {} to create, {} to update, {} to destroy{}",
+        bold("Plan:"),
+        green(&summary.create.to_string()),
+        yellow(&summary.update.to_string()),
+        red(&summary.remove.to_string()),
+        if summary.conflicts > 0 {
+            red(&format!(", {} conflicts", summary.conflicts))
+        } else {
+            ".".to_string()
+        }
+    );
+}
+
+pub(crate) fn print_state(project: &Project, state: &State) {
+    if state.resources.is_empty() {
+        println!("{}", dim("State is empty."));
+        return;
+    }
+
+    println!("{}", bold("State:"));
+    for (id, resource) in &state.resources {
+        match resource {
+            StateResource::Symlink { target, source } => println!(
+                "  symlink {} -> {}",
+                display_target(target),
+                display_source(project, source),
+            ),
+            StateResource::Package { provider, name } => {
+                println!("  package {provider} {name}")
+            }
+        }
+        println!("    {}", dim(id));
+    }
+}
+
+pub(crate) fn print_state_initialized(project: &Project, state_path: &Path) {
+    println!(
+        "{} {}",
+        dim("Initializing state:"),
+        dim(&display_source(project, state_path))
+    );
+    println!();
+}
+
+pub(crate) fn apply_with_status(
+    action: &str,
+    noun: &str,
+    id: &str,
+    apply: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    println!("  {id}: {}...", dim(action));
+    match apply() {
+        Ok(()) => {
+            println!("  {id}: {}", green(&format!("{noun} complete")));
+            Ok(())
+        }
+        Err(error) => {
+            println!("  {id}: {}", red(&format!("{noun} failed")));
+            Err(error)
+        }
+    }
+}
+
+fn colors_enabled() -> bool {
+    std::io::stdout().is_terminal()
+}
+
+pub(crate) fn green(value: &str) -> String {
+    if colors_enabled() {
+        value.green().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+pub(crate) fn yellow(value: &str) -> String {
+    if colors_enabled() {
+        value.yellow().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+pub(crate) fn red(value: &str) -> String {
+    if colors_enabled() {
+        value.red().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+pub(crate) fn bold(value: &str) -> String {
+    if colors_enabled() {
+        value.bold().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+pub(crate) fn dim(value: &str) -> String {
+    if colors_enabled() {
+        value.dimmed().to_string()
+    } else {
+        value.to_string()
+    }
+}
