@@ -11,7 +11,8 @@ The docs match the current `main` branch.
 - [Install](install.md): install script and source install.
 - [Platforms and profiles](platforms-and-profiles.md): target systems, distros, hosts, and profiles.
 - [Symlinks](symlinks.md): link files and directories from the repo into `$HOME`.
-- [Packages](packages.md): use `pacman`, `paru`, `apt`, or your own package provider.
+- [Packages](packages.md): use `pacman`, `paru`, `apt`, `brew`, or your own package provider.
+- [Services](services.md): manage systemd and Homebrew services.
 - [State](state.md): inspect or forget resources tracked by `dots`.
 - [Release](release.md): tag-based GitHub releases.
 

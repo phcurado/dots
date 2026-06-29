@@ -42,13 +42,17 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
     let mut summary = PlanSummary::default();
     for step in plan {
         match step {
-            PlanStep::SymlinkCreate(_) | PlanStep::PackageCreate { .. } => summary.create += 1,
+            PlanStep::SymlinkCreate(_)
+            | PlanStep::PackageCreate { .. }
+            | PlanStep::ServiceCreate { .. } => summary.create += 1,
             PlanStep::SymlinkUpdate(_) => summary.update += 1,
-            PlanStep::SymlinkRemove { .. } | PlanStep::PackageRemove { .. } => summary.remove += 1,
-            PlanStep::SymlinkConflict { .. } | PlanStep::PackageConflict { .. } => {
-                summary.conflicts += 1
-            }
-            PlanStep::SymlinkNoop(_) | PlanStep::PackageNoop(_) => {}
+            PlanStep::SymlinkRemove { .. }
+            | PlanStep::PackageRemove { .. }
+            | PlanStep::ServiceRemove { .. } => summary.remove += 1,
+            PlanStep::SymlinkConflict { .. }
+            | PlanStep::PackageConflict { .. }
+            | PlanStep::ServiceConflict { .. } => summary.conflicts += 1,
+            PlanStep::SymlinkNoop(_) | PlanStep::PackageNoop(_) | PlanStep::ServiceNoop(_) => {}
         }
     }
     summary
@@ -132,6 +136,47 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep]) {
         }
     }
 
+    let has_services = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::ServiceCreate { .. }
+                | PlanStep::ServiceRemove { .. }
+                | PlanStep::ServiceConflict { .. }
+        )
+    });
+    if has_services {
+        if has_symlinks || has_packages {
+            println!();
+        }
+        println!("{}", bold("Services:"));
+        for step in plan {
+            match step {
+                PlanStep::ServiceCreate { resource, .. } => println!(
+                    "  {} {} {} {}",
+                    green("+"),
+                    resource.provider,
+                    resource.action.as_str(),
+                    resource.name,
+                ),
+                PlanStep::ServiceRemove { resource, .. } => println!(
+                    "  {} {} {} {}",
+                    red("-"),
+                    resource.provider,
+                    resource.action.as_str(),
+                    resource.name,
+                ),
+                PlanStep::ServiceConflict { resource, reason } => println!(
+                    "  {} {} {} {} ({reason})",
+                    red("!"),
+                    resource.provider,
+                    resource.action.as_str(),
+                    resource.name,
+                ),
+                _ => {}
+            }
+        }
+    }
+
     println!();
     println!(
         "{} {} to create, {} to update, {} to destroy{}",
@@ -164,6 +209,11 @@ pub(crate) fn print_state(project: &Project, state: &State) {
             StateResource::Package { provider, name } => {
                 println!("  package {provider} {name}")
             }
+            StateResource::Service {
+                provider,
+                action,
+                name,
+            } => println!("  service {provider} {action} {name}"),
         }
         println!("    {}", dim(id));
     }

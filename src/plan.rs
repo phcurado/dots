@@ -6,6 +6,7 @@ use anyhow::Result;
 
 use crate::config::Config;
 use crate::package::{PackageProvider, PackageResource, package_installed};
+use crate::service::{ServiceProvider, ServiceResource, service_current};
 use crate::state::{State, StateResource};
 use crate::symlink::{
     SymlinkResource, resolve_symlink_target, same_path, state_symlink, symlink_id_for,
@@ -36,6 +37,19 @@ pub(crate) enum PlanStep {
     PackageNoop(PackageResource),
     PackageConflict {
         resource: PackageResource,
+        reason: String,
+    },
+    ServiceCreate {
+        resource: ServiceResource,
+        provider: ServiceProvider,
+    },
+    ServiceRemove {
+        resource: ServiceResource,
+        provider: ServiceProvider,
+    },
+    ServiceNoop(ServiceResource),
+    ServiceConflict {
+        resource: ServiceResource,
         reason: String,
     },
 }
@@ -118,6 +132,27 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    for resource in &config.services {
+        let id = service_id_for(resource);
+        declared.insert(id.clone());
+
+        let Some(provider) = config.service_providers.get(&resource.provider) else {
+            plan.push(PlanStep::ServiceConflict {
+                resource: resource.clone(),
+                reason: format!("{} service provider is not configured", resource.provider),
+            });
+            continue;
+        };
+        if service_current(provider, resource)? {
+            plan.push(PlanStep::ServiceNoop(resource.clone()));
+        } else {
+            plan.push(PlanStep::ServiceCreate {
+                resource: resource.clone(),
+                provider: provider.clone(),
+            });
+        }
+    }
+
     for (id, resource) in &state.resources {
         if declared.contains(id) {
             continue;
@@ -143,6 +178,32 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                     }),
                 }
             }
+            StateResource::Service {
+                provider,
+                action,
+                name,
+            } => {
+                let action = match action.as_str() {
+                    "start" => crate::service::ServiceAction::Start,
+                    "enable" => crate::service::ServiceAction::Enable,
+                    _ => continue,
+                };
+                let resource = ServiceResource {
+                    provider: provider.clone(),
+                    action,
+                    name: name.clone(),
+                };
+                match config.service_providers.get(provider) {
+                    Some(provider) => plan.push(PlanStep::ServiceRemove {
+                        resource,
+                        provider: provider.clone(),
+                    }),
+                    None => plan.push(PlanStep::ServiceConflict {
+                        resource,
+                        reason: format!("{provider} service provider is not configured"),
+                    }),
+                }
+            }
         }
     }
 
@@ -158,6 +219,23 @@ pub(crate) fn state_package(resource: &PackageResource) -> StateResource {
 
 pub(crate) fn package_id_for(resource: &PackageResource) -> String {
     format!("package:{}:{}", resource.provider, resource.name)
+}
+
+pub(crate) fn state_service(resource: &ServiceResource) -> StateResource {
+    StateResource::Service {
+        provider: resource.provider.clone(),
+        action: resource.action.as_str().to_string(),
+        name: resource.name.clone(),
+    }
+}
+
+pub(crate) fn service_id_for(resource: &ServiceResource) -> String {
+    format!(
+        "service:{}:{}:{}",
+        resource.provider,
+        resource.action.as_str(),
+        resource.name
+    )
 }
 
 #[cfg(test)]

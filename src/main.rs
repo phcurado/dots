@@ -5,6 +5,7 @@ mod package;
 mod plan;
 mod platform;
 mod project;
+mod service;
 mod state;
 mod symlink;
 
@@ -117,7 +118,10 @@ fn run_state_command(
 }
 
 fn state_key_from_arg(resource: &str) -> String {
-    if resource.starts_with("symlink:") || resource.starts_with("package:") {
+    if resource.starts_with("symlink:")
+        || resource.starts_with("package:")
+        || resource.starts_with("service:")
+    {
         resource.to_string()
     } else {
         format!("symlink:{}", expand_home(resource).display())

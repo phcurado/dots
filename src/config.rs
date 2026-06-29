@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +9,7 @@ use crate::package::{PackageProvider, PackageResource};
 use crate::plan::package_id_for;
 use crate::platform::platform_table;
 use crate::project::Project;
+use crate::service::{ServiceAction, ServiceProvider, ServiceResource};
 use crate::symlink::{
     SymlinkDeclaration, SymlinkResource, expand_home, expand_symlink_declaration, resolve_source,
     same_path,
@@ -18,7 +19,9 @@ use crate::symlink::{
 pub(crate) struct Config {
     pub(crate) symlinks: Vec<SymlinkResource>,
     pub(crate) packages: Vec<PackageResource>,
+    pub(crate) services: Vec<ServiceResource>,
     pub(crate) package_providers: BTreeMap<String, PackageProvider>,
+    pub(crate) service_providers: BTreeMap<String, ServiceProvider>,
 }
 
 pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
@@ -26,6 +29,8 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let symlinks = lua.create_table()?;
     let packages = lua.create_table()?;
     let package_providers = lua.create_table()?;
+    let service_providers = lua.create_table()?;
+    let services = lua.create_table()?;
     let dots = lua.create_table()?;
 
     let root = project.root.clone();
@@ -71,7 +76,14 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     dots.set("root", project.root.display().to_string())?;
     dots.set("os", std::env::consts::OS)?;
 
-    install_provider_api(&lua, &dots, package_providers.clone(), packages.clone())?;
+    install_provider_api(
+        &lua,
+        &dots,
+        package_providers.clone(),
+        packages.clone(),
+        service_providers.clone(),
+        services.clone(),
+    )?;
 
     let package: Table = lua.globals().get("package")?;
     let preload: Table = package.get("preload")?;
@@ -110,6 +122,19 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             name: item.get::<String>("name")?,
         });
     }
+    for item in services.sequence_values::<Table>() {
+        let item = item?;
+        let action = match item.get::<String>("action")?.as_str() {
+            "start" => ServiceAction::Start,
+            "enable" => ServiceAction::Enable,
+            action => bail!("unsupported service action: {action}"),
+        };
+        config.services.push(ServiceResource {
+            provider: item.get::<String>("provider")?,
+            action,
+            name: item.get::<String>("name")?,
+        });
+    }
     for pair in package_providers.pairs::<String, Table>() {
         let (name, item) = pair?;
         config.package_providers.insert(
@@ -119,6 +144,20 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
                 installed: item.get::<String>("installed")?,
                 install: item.get::<String>("install")?,
                 remove: item.get::<String>("remove")?,
+            },
+        );
+    }
+    for pair in service_providers.pairs::<String, Table>() {
+        let (name, item) = pair?;
+        config.service_providers.insert(
+            name,
+            ServiceProvider {
+                started: item.get::<Option<String>>("started")?,
+                start: item.get::<Option<String>>("start")?,
+                stop: item.get::<Option<String>>("stop")?,
+                enabled: item.get::<Option<String>>("enabled")?,
+                enable: item.get::<Option<String>>("enable")?,
+                disable: item.get::<Option<String>>("disable")?,
             },
         );
     }
@@ -144,18 +183,29 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     }
     config.symlinks = symlinks.into_values().collect();
 
-    let mut packages = BTreeMap::<String, PackageResource>::new();
-    for resource in config.packages.drain(..) {
-        packages.insert(package_id_for(&resource), resource);
-    }
-    config.packages = packages.into_values().collect();
+    let mut package_ids = BTreeSet::new();
+    config
+        .packages
+        .retain(|resource| package_ids.insert(package_id_for(resource)));
+
+    let mut service_ids = BTreeSet::new();
+    config
+        .services
+        .retain(|resource| service_ids.insert(crate::plan::service_id_for(resource)));
 
     Ok(())
 }
 
-fn install_provider_api(lua: &Lua, dots: &Table, providers: Table, packages: Table) -> Result<()> {
+fn install_provider_api(
+    lua: &Lua,
+    dots: &Table,
+    providers: Table,
+    packages: Table,
+    service_providers: Table,
+    services: Table,
+) -> Result<()> {
     let provider_api = lua.create_table()?;
-    let dots_for_provider = dots.clone();
+    let dots_for_package = dots.clone();
     let package = lua.create_function(move |lua, (name, spec): (String, Table)| {
         let provider = PackageProvider {
             available: spec.get("available")?,
@@ -165,7 +215,7 @@ fn install_provider_api(lua: &Lua, dots: &Table, providers: Table, packages: Tab
         };
         register_package_provider(
             lua,
-            &dots_for_provider,
+            &dots_for_package,
             &providers,
             packages.clone(),
             &name,
@@ -174,14 +224,39 @@ fn install_provider_api(lua: &Lua, dots: &Table, providers: Table, packages: Tab
         .map_err(mlua::Error::external)
     })?;
     provider_api.set("package", package)?;
+
+    let dots_for_service = dots.clone();
+    let service = lua.create_function(move |lua, (name, spec): (String, Table)| {
+        let provider = ServiceProvider {
+            started: spec.get("started")?,
+            start: spec.get("start")?,
+            stop: spec.get("stop")?,
+            enabled: spec.get("enabled")?,
+            enable: spec.get("enable")?,
+            disable: spec.get("disable")?,
+        };
+        register_service_provider(
+            lua,
+            &dots_for_service,
+            &service_providers,
+            services.clone(),
+            &name,
+            provider,
+        )
+        .map_err(mlua::Error::external)
+    })?;
+    provider_api.set("service", service)?;
     dots.set("provider", provider_api)?;
     Ok(())
 }
 
 fn load_builtin_lua(lua: &Lua) -> Result<()> {
-    lua.load(include_str!("lua/prelude.lua"))
-        .set_name("dots builtin prelude")
-        .exec()?;
+    for (name, source) in [
+        ("dots packages", include_str!("lua/packages.lua")),
+        ("dots services", include_str!("lua/services.lua")),
+    ] {
+        lua.load(source).set_name(name).exec()?;
+    }
     Ok(())
 }
 
@@ -219,6 +294,61 @@ fn package_provider_table(lua: &Lua, packages: Table, provider: String) -> Resul
     })?;
     table.set("install", install)?;
     Ok(table)
+}
+
+fn register_service_provider(
+    lua: &Lua,
+    dots: &Table,
+    providers: &Table,
+    services: Table,
+    name: &str,
+    provider: ServiceProvider,
+) -> Result<()> {
+    let spec = lua.create_table()?;
+    spec.set("started", provider.started)?;
+    spec.set("start", provider.start)?;
+    spec.set("stop", provider.stop)?;
+    spec.set("enabled", provider.enabled)?;
+    spec.set("enable", provider.enable)?;
+    spec.set("disable", provider.disable)?;
+    providers.set(name, spec)?;
+    dots.set(
+        name,
+        service_provider_table(lua, services, name.to_string())?,
+    )?;
+    Ok(())
+}
+
+fn service_provider_table(lua: &Lua, services: Table, provider: String) -> Result<Table> {
+    let table = lua.create_table()?;
+    let start = service_action(
+        lua,
+        services.clone(),
+        provider.clone(),
+        ServiceAction::Start,
+    )?;
+    let enable = service_action(lua, services, provider, ServiceAction::Enable)?;
+    table.set("start", start)?;
+    table.set("enable", enable)?;
+    Ok(table)
+}
+
+fn service_action(
+    lua: &Lua,
+    services: Table,
+    provider: String,
+    action: ServiceAction,
+) -> Result<mlua::Function> {
+    Ok(lua.create_function(move |lua, service_list: Table| {
+        for name in table_strings(Some(service_list))? {
+            let item = lua.create_table()?;
+            item.set("provider", provider.clone())?;
+            item.set("action", action.as_str())?;
+            item.set("name", name)?;
+            services.raw_push(item)?;
+        }
+        Ok(())
+    })?)
 }
 
 fn install_package_path(lua: &Lua, root: &Path) -> Result<()> {
@@ -369,6 +499,24 @@ mod tests {
     }
 
     #[test]
+    fn package_order_is_preserved() {
+        let project = temp_project(
+            r#"
+            dots.brew.tap({ "FelixKratz/formulae" })
+            dots.brew.install({ "sketchybar" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.packages.len(), 2);
+        assert_eq!(config.packages[0].provider, "brew-tap");
+        assert_eq!(config.packages[0].name, "FelixKratz/formulae");
+        assert_eq!(config.packages[1].provider, "brew");
+        assert_eq!(config.packages[1].name, "sketchybar");
+    }
+
+    #[test]
     fn loads_brew_casks() {
         let project = temp_project(r#"dots.brew.cask({ "ghostty" })"#);
 
@@ -378,6 +526,50 @@ mod tests {
         assert_eq!(config.packages.len(), 1);
         assert_eq!(config.packages[0].provider, "brew-cask");
         assert_eq!(config.packages[0].name, "ghostty");
+    }
+
+    #[test]
+    fn loads_brew_taps() {
+        let project = temp_project(r#"dots.brew.tap({ "FelixKratz/formulae" })"#);
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(config.package_providers.contains_key("brew-tap"));
+        assert_eq!(config.packages.len(), 1);
+        assert_eq!(config.packages[0].provider, "brew-tap");
+        assert_eq!(config.packages[0].name, "FelixKratz/formulae");
+    }
+
+    #[test]
+    fn loads_services() {
+        let project = temp_project(
+            r#"
+            dots.systemd.enable({ "docker.service" })
+            dots.systemd.start({ "docker.service" })
+            dots.brew.service.start({ "sketchybar" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(config.service_providers.contains_key("systemd"));
+        assert!(config.service_providers.contains_key("brew-service"));
+        assert_eq!(config.services.len(), 3);
+        assert!(config.services.iter().any(|service| {
+            service.provider == "systemd"
+                && service.action == ServiceAction::Enable
+                && service.name == "docker.service"
+        }));
+        assert!(config.services.iter().any(|service| {
+            service.provider == "systemd"
+                && service.action == ServiceAction::Start
+                && service.name == "docker.service"
+        }));
+        assert!(config.services.iter().any(|service| {
+            service.provider == "brew-service"
+                && service.action == ServiceAction::Start
+                && service.name == "sketchybar"
+        }));
     }
 
     #[test]

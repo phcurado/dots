@@ -4,7 +4,8 @@ use crate::output::{apply_with_status, bold, display_target, green, red, summari
 use crate::package::{
     PackageProvider, PackageResource, package_provider_available, run_provider_command,
 };
-use crate::plan::{PlanStep, package_id_for, state_package};
+use crate::plan::{PlanStep, package_id_for, service_id_for, state_package, state_service};
+use crate::service::{ServiceProvider, ServiceResource, service_apply, service_remove};
 use crate::state::{State, StateResource};
 use crate::symlink::{apply_symlink, remove_symlink, state_symlink, symlink_id_for};
 
@@ -78,7 +79,36 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .insert(package_id_for(resource), state_package(resource));
             }
-            PlanStep::SymlinkConflict { .. } | PlanStep::PackageConflict { .. } => unreachable!(),
+            PlanStep::ServiceCreate { resource, provider } => apply_with_status(
+                "Applying",
+                "Apply",
+                &format!(
+                    "service.{}.{}.{}",
+                    resource.provider,
+                    resource.action.as_str(),
+                    resource.name
+                ),
+                || apply_service(provider, resource, state),
+            )?,
+            PlanStep::ServiceRemove { resource, provider } => apply_with_status(
+                "Removing",
+                "Remove",
+                &format!(
+                    "service.{}.{}.{}",
+                    resource.provider,
+                    resource.action.as_str(),
+                    resource.name
+                ),
+                || remove_service(provider, resource, state),
+            )?,
+            PlanStep::ServiceNoop(resource) => {
+                state
+                    .resources
+                    .insert(service_id_for(resource), state_service(resource));
+            }
+            PlanStep::SymlinkConflict { .. }
+            | PlanStep::PackageConflict { .. }
+            | PlanStep::ServiceConflict { .. } => unreachable!(),
         }
     }
 
@@ -106,6 +136,10 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
                 .resources
                 .insert(package_id_for(resource), state_package(resource))
                 .is_none(),
+            PlanStep::ServiceNoop(resource) => state
+                .resources
+                .insert(service_id_for(resource), state_service(resource))
+                .is_none(),
             _ => false,
         };
         if inserted {
@@ -113,6 +147,28 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
         }
     }
     tracked
+}
+
+fn apply_service(
+    provider: &ServiceProvider,
+    resource: &ServiceResource,
+    state: &mut State,
+) -> Result<()> {
+    service_apply(provider, resource)?;
+    state
+        .resources
+        .insert(service_id_for(resource), state_service(resource));
+    Ok(())
+}
+
+fn remove_service(
+    provider: &ServiceProvider,
+    resource: &ServiceResource,
+    state: &mut State,
+) -> Result<()> {
+    service_remove(provider, resource)?;
+    state.resources.remove(&service_id_for(resource));
+    Ok(())
 }
 
 fn install_package(

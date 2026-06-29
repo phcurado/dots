@@ -12,6 +12,12 @@ pub(crate) enum StateResource {
     Symlink { target: PathBuf, source: PathBuf },
     #[serde(rename = "package")]
     Package { provider: String, name: String },
+    #[serde(rename = "service")]
+    Service {
+        provider: String,
+        action: String,
+        name: String,
+    },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
