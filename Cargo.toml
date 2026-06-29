@@ -3,7 +3,7 @@ name = "dots"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Lua-powered workstation configuration with Terraform-style planning."
+description = "Declarative workstation configuration with Terraform-style planning."
 license = "MIT"
 
 [dependencies]

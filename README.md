@@ -2,29 +2,47 @@
 
 # dots
 
-**Manage your dotfiles across machines seamlessly.**
+**Declarative dotfiles and workstation setup.**
+
+**[Docs](docs/index.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
+**[Quick start](docs/quick-start.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
+**[Symlinks](docs/symlinks.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
+**[Packages](docs/packages.md)**
 
 </div>
 
-`dots` runs from a dotfiles repository, fetches configuration, shows the planned changes and applies the state diff to keep your setup declarative and unified.
+## Introduction
+
+`dots` brings a Terraform-style workflow to a dotfiles repo: declare the setup,
+review the plan, then apply it. It manages symlinks, package installs, and local
+state without taking over files it does not own.
 
 ## Quick start
 
-Create `dots.lua` in your dotfiles directory:
+In your dotfiles repo, add a `dots.lua` file:
 
 ```lua
 dots.symlink("~/.config/nvim", ".config/nvim")
 dots.symlink("~/.config/tmux", ".config/tmux")
 dots.symlink("~/.zshrc", ".zshrc")
+
+if dots.platform.family == "arch" then
+  dots.pacman.install({ "base-devel", "git", "paru" })
+  dots.paru.install({ "bat", "ripgrep" })
+elseif dots.platform.family == "debian" then
+  dots.apt.install({ "bat", "ripgrep" })
+end
+
+if dots.profile == "work" then
+  dots.symlink("~/.gitconfig", "profiles/work/gitconfig")
+end
 ```
 
-Preview:
+Check the plan:
 
 ```sh
-dots plan
+dots --profile work plan
 ```
-
-Example output:
 
 ```diff
 Initializing state: .dots/state.json
@@ -33,39 +51,48 @@ Symlinks:
   + symlink ~/.config/nvim -> .config/nvim
   + symlink ~/.config/tmux -> .config/tmux
   + symlink ~/.zshrc -> .zshrc
+  + symlink ~/.gitconfig -> profiles/work/gitconfig
 
-Plan: 3 to create, 0 to update, 0 to destroy.
+Packages:
+  + pacman base-devel
+  + pacman git
+  + pacman paru
+  + paru bat
+  + paru ripgrep
+
+Plan: 9 to create, 0 to update, 0 to destroy.
 ```
 
-Apply:
+Apply it:
 
 ```sh
-dots apply
+dots --profile work apply
 ```
-
-## Configuration
-
-`dots` searches upward from the current directory for `dots.lua`. The directory containing `dots.lua` is the project root, and relative source paths are resolved from there.
-
-Split configuration with normal Lua modules:
-
-```lua
-require("modules.common")
-require("modules.linux")
-```
-
-## State
-
-Local state lives in:
 
 ```text
-.dots/state.json
+Applying changes...
+
+  symlink.~/.config/nvim: Creating...
+  symlink.~/.config/nvim: Create complete
+  symlink.~/.config/tmux: Creating...
+  symlink.~/.config/tmux: Create complete
+  symlink.~/.zshrc: Creating...
+  symlink.~/.zshrc: Create complete
+  symlink.~/.gitconfig: Creating...
+  symlink.~/.gitconfig: Create complete
+  package.pacman.base-devel: Installing...
+  package.pacman.base-devel: Install complete
+  package.pacman.git: Installing...
+  package.pacman.git: Install complete
+  package.pacman.paru: Installing...
+  package.pacman.paru: Install complete
+  package.paru.bat: Installing...
+  package.paru.bat: Install complete
+  package.paru.ripgrep: Installing...
+  package.paru.ripgrep: Install complete
+
+Apply complete: 9 created, 0 updated, 0 destroyed.
 ```
 
-State records ownership so `dots` can remove managed resources without touching unmanaged files.
-
-## Documentation
-
-- [Symlinks](docs/symlinks.md)
-- [Packages](docs/packages.md)
-- [Full docs](docs/index.md)
+For the full config API, state commands, and provider examples, see the
+[docs](docs/index.md).

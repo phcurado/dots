@@ -21,6 +21,10 @@ struct Cli {
     /// Lua config file. Defaults to dots.lua in the project root.
     #[arg(short, long, global = true)]
     file: Option<PathBuf>,
+
+    /// Profile name for host or machine-specific config.
+    #[arg(long, global = true)]
+    profile: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -136,6 +140,7 @@ struct Project {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let profile = selected_profile(cli.profile.as_deref())?;
     let project = find_project(cli.file)?;
     let state_path = project.root.join(".dots/state.json");
     let state_exists = state_path.exists();
@@ -143,7 +148,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Plan => {
-            let config = load_config(&project)?;
+            let config = load_config(&project, &profile)?;
             if !state_exists {
                 print_state_initialized(&project, &state_path);
             }
@@ -153,7 +158,7 @@ fn main() -> Result<()> {
             print_plan(&project, &plan);
         }
         Command::Apply => {
-            let config = load_config(&project)?;
+            let config = load_config(&project, &profile)?;
             if !state_exists {
                 print_state_initialized(&project, &state_path);
             }
@@ -170,6 +175,105 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn selected_profile(profile: Option<&str>) -> Result<String> {
+    if let Some(profile) = profile {
+        return Ok(profile.to_string());
+    }
+    if let Ok(profile) = std::env::var("DOTS_PROFILE") {
+        if !profile.is_empty() {
+            return Ok(profile);
+        }
+    }
+    hostname()
+        .or_else(|| std::env::var("USER").ok())
+        .context("could not determine default profile")
+}
+
+fn hostname() -> Option<String> {
+    if let Ok(hostname) = std::env::var("HOSTNAME") {
+        if !hostname.is_empty() {
+            return Some(hostname);
+        }
+    }
+    fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|hostname| hostname.trim().to_string())
+        .filter(|hostname| !hostname.is_empty())
+}
+
+fn platform_table(lua: &Lua) -> Result<Table> {
+    let table = lua.create_table()?;
+    let os = platform_os();
+    let distro = linux_os_release().and_then(|values| values.get("ID").cloned());
+    let family = platform_family(distro.as_deref());
+
+    table.set("system", format!("{}-{os}", std::env::consts::ARCH))?;
+    table.set("arch", std::env::consts::ARCH)?;
+    table.set("os", os)?;
+    table.set("hostname", hostname().unwrap_or_default())?;
+    table.set("distro", distro)?;
+    table.set("family", family)?;
+    Ok(table)
+}
+
+fn platform_os() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "darwin",
+        os => os,
+    }
+}
+
+fn platform_family(distro: Option<&str>) -> String {
+    match std::env::consts::OS {
+        "macos" => "darwin".to_string(),
+        "linux" => {
+            let values = linux_os_release().unwrap_or_default();
+            let id = distro.unwrap_or_default();
+            let id_like = values
+                .get("ID_LIKE")
+                .map(String::as_str)
+                .unwrap_or_default();
+            if id == "arch" || id_like.split_whitespace().any(|value| value == "arch") {
+                "arch".to_string()
+            } else if id == "debian"
+                || id == "ubuntu"
+                || id_like
+                    .split_whitespace()
+                    .any(|value| value == "debian" || value == "ubuntu")
+            {
+                "debian".to_string()
+            } else {
+                id.to_string()
+            }
+        }
+        os => os.to_string(),
+    }
+}
+
+fn linux_os_release() -> Option<BTreeMap<String, String>> {
+    let source = fs::read_to_string("/etc/os-release").ok()?;
+    let mut values = BTreeMap::new();
+    for line in source.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        values.insert(key.to_string(), unquote_os_release_value(value));
+    }
+    Some(values)
+}
+
+fn unquote_os_release_value(value: &str) -> String {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value)
+        .to_string()
 }
 
 fn find_project(file: Option<PathBuf>) -> Result<Project> {
@@ -196,7 +300,7 @@ fn find_project(file: Option<PathBuf>) -> Result<Project> {
     }
 }
 
-fn load_config(project: &Project) -> Result<Config> {
+fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let lua = Lua::new();
     let symlinks = lua.create_table()?;
     let packages = lua.create_table()?;
@@ -238,7 +342,11 @@ fn load_config(project: &Project) -> Result<Config> {
         Ok(())
     })?;
 
+    let platform = platform_table(&lua)?;
+
     dots.set("symlink", symlink)?;
+    dots.set("profile", profile)?;
+    dots.set("platform", platform)?;
     dots.set("root", project.root.display().to_string())?;
     dots.set("os", std::env::consts::OS)?;
 
@@ -664,14 +772,6 @@ fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
             });
             continue;
         };
-        if !package_provider_available(provider)? {
-            plan.push(PlanStep::PackageConflict {
-                resource: resource.clone(),
-                reason: format!("{} is not available", resource.provider),
-            });
-            continue;
-        }
-
         if package_installed(provider, resource)? {
             plan.push(PlanStep::PackageNoop(resource.clone()));
         } else {
@@ -1084,6 +1184,9 @@ fn install_package(
     resource: &PackageResource,
     state: &mut State,
 ) -> Result<()> {
+    if !package_provider_available(provider)? {
+        bail!("{} is not available", resource.provider);
+    }
     if !run_provider_command(&provider.install, Some(&resource.name), false)? {
         bail!("{} failed to install {}", resource.provider, resource.name);
     }
@@ -1098,6 +1201,9 @@ fn remove_package(
     resource: &PackageResource,
     state: &mut State,
 ) -> Result<()> {
+    if !package_provider_available(provider)? {
+        bail!("{} is not available", resource.provider);
+    }
     if !run_provider_command(&provider.remove, Some(&resource.name), false)? {
         bail!("{} failed to remove {}", resource.provider, resource.name);
     }
