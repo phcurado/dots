@@ -11,6 +11,7 @@ use crate::plan::{
 use crate::service::{ServiceProvider, ServiceResource, service_apply, service_remove};
 use crate::state::{State, StateResource};
 use crate::symlink::{apply_symlink, remove_symlink, state_symlink, symlink_id_for};
+use crate::user::{UserGroupResource, UserShellResource, apply_group, apply_shell};
 
 pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
     let summary = summarize_plan(plan);
@@ -132,10 +133,24 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .insert(font_id_for(resource), state_font(resource));
             }
+            PlanStep::UserShellUpdate { resource, .. } => apply_with_status(
+                "Updating",
+                "Update",
+                &format!("user.shell.{}", resource.name),
+                || update_shell(resource),
+            )?,
+            PlanStep::UserGroupAdd(resource) => apply_with_status(
+                "Adding",
+                "Add",
+                &format!("user.group.{}", resource.name),
+                || add_group(resource),
+            )?,
+            PlanStep::UserShellNoop | PlanStep::UserGroupNoop => {}
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
-            | PlanStep::FontConflict { .. } => unreachable!(),
+            | PlanStep::FontConflict { .. }
+            | PlanStep::UserGroupConflict { .. } => unreachable!(),
         }
     }
 
@@ -178,6 +193,14 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
         }
     }
     tracked
+}
+
+fn update_shell(resource: &UserShellResource) -> Result<()> {
+    apply_shell(resource)
+}
+
+fn add_group(resource: &UserGroupResource) -> Result<()> {
+    apply_group(resource)
 }
 
 fn install_font(resource: &FontResource, state: &mut State) -> Result<()> {

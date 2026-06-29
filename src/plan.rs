@@ -13,6 +13,9 @@ use crate::symlink::{
     SymlinkResource, resolve_symlink_target, same_path, state_symlink, symlink_id_for,
     symlink_matches,
 };
+use crate::user::{
+    UserGroupResource, UserShellResource, current_shell, group_exists, shell_matches,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum PlanStep {
@@ -62,6 +65,17 @@ pub(crate) enum PlanStep {
     FontNoop(FontResource),
     FontConflict {
         resource: FontResource,
+        reason: String,
+    },
+    UserShellUpdate {
+        resource: UserShellResource,
+        current: Option<PathBuf>,
+    },
+    UserShellNoop,
+    UserGroupAdd(UserGroupResource),
+    UserGroupNoop,
+    UserGroupConflict {
+        resource: UserGroupResource,
         reason: String,
     },
 }
@@ -184,6 +198,32 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                 resource: resource.clone(),
                 provider: provider.clone(),
             });
+        }
+    }
+
+    if let Some(resource) = &config.user.shell {
+        if shell_matches(resource) {
+            plan.push(PlanStep::UserShellNoop);
+        } else {
+            plan.push(PlanStep::UserShellUpdate {
+                resource: resource.clone(),
+                current: current_shell(),
+            });
+        }
+    }
+
+    for resource in &config.user.groups {
+        if std::env::consts::OS != "linux" {
+            plan.push(PlanStep::UserGroupConflict {
+                resource: resource.clone(),
+                reason: "user groups are only supported on Linux".to_string(),
+            });
+            continue;
+        }
+        if group_exists(resource)? {
+            plan.push(PlanStep::UserGroupNoop);
+        } else {
+            plan.push(PlanStep::UserGroupAdd(resource.clone()));
         }
     }
 

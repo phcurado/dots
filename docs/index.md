@@ -22,5 +22,6 @@ or changing symlinks.
 - [Packages](packages.md): install packages with `pacman`, `paru`, `apt`, or Homebrew.
 - [Services](services.md): start or enable systemd and Homebrew services.
 - [Fonts](fonts.md): keep fonts in the repo and install them for the current OS.
+- [User](user.md): set the login shell or add the current user to groups.
 - [State](state.md): inspect what `dots` owns, or stop tracking something.
 - [Release](release.md): publish a tagged GitHub release.

@@ -45,8 +45,11 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkCreate(_)
             | PlanStep::PackageCreate { .. }
             | PlanStep::ServiceCreate { .. }
-            | PlanStep::FontCreate(_) => summary.create += 1,
-            PlanStep::SymlinkUpdate(_) | PlanStep::FontUpdate(_) => summary.update += 1,
+            | PlanStep::FontCreate(_)
+            | PlanStep::UserGroupAdd(_) => summary.create += 1,
+            PlanStep::SymlinkUpdate(_)
+            | PlanStep::FontUpdate(_)
+            | PlanStep::UserShellUpdate { .. } => summary.update += 1,
             PlanStep::SymlinkRemove { .. }
             | PlanStep::PackageRemove { .. }
             | PlanStep::ServiceRemove { .. }
@@ -54,11 +57,14 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
-            | PlanStep::FontConflict { .. } => summary.conflicts += 1,
+            | PlanStep::FontConflict { .. }
+            | PlanStep::UserGroupConflict { .. } => summary.conflicts += 1,
             PlanStep::SymlinkNoop(_)
             | PlanStep::PackageNoop(_)
             | PlanStep::ServiceNoop(_)
-            | PlanStep::FontNoop(_) => {}
+            | PlanStep::FontNoop(_)
+            | PlanStep::UserShellNoop
+            | PlanStep::UserGroupNoop => {}
         }
     }
     summary
@@ -213,6 +219,41 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep]) {
                     resource.action.as_str(),
                     resource.name,
                 ),
+                _ => {}
+            }
+        }
+    }
+
+    let has_user = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::UserShellUpdate { .. }
+                | PlanStep::UserGroupAdd(_)
+                | PlanStep::UserGroupConflict { .. }
+        )
+    });
+    if has_user {
+        if has_symlinks || has_packages || has_fonts || has_services {
+            println!();
+        }
+        println!("{}", bold("User:"));
+        for step in plan {
+            match step {
+                PlanStep::UserShellUpdate { resource, current } => println!(
+                    "  {} shell {} -> {}",
+                    yellow("~"),
+                    current
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    resource.path.display(),
+                ),
+                PlanStep::UserGroupAdd(resource) => {
+                    println!("  {} group {}", green("+"), resource.name)
+                }
+                PlanStep::UserGroupConflict { resource, reason } => {
+                    println!("  {} group {} ({reason})", red("!"), resource.name)
+                }
                 _ => {}
             }
         }

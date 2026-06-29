@@ -1,0 +1,117 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
+use std::process::{Command as ProcessCommand, Stdio};
+
+use anyhow::{Context, Result, bail};
+
+#[derive(Debug, Default)]
+pub(crate) struct UserConfig {
+    pub(crate) shell: Option<UserShellResource>,
+    pub(crate) groups: Vec<UserGroupResource>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UserShellResource {
+    pub(crate) name: String,
+    pub(crate) path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UserGroupResource {
+    pub(crate) name: String,
+}
+
+pub(crate) fn resolve_shell(name: &str) -> Result<UserShellResource> {
+    let path = command_path(name).with_context(|| format!("could not find shell: {name}"))?;
+    Ok(UserShellResource {
+        name: name.to_string(),
+        path,
+    })
+}
+
+fn command_path(name: &str) -> Option<PathBuf> {
+    if name.contains('/') {
+        let path = PathBuf::from(name);
+        return path.exists().then_some(path);
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|path| path.exists())
+}
+
+pub(crate) fn current_shell() -> Option<PathBuf> {
+    let user = current_user()?;
+    let passwd = fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let mut parts = line.split(':');
+        let name = parts.next()?;
+        if name != user {
+            return None;
+        }
+        parts.nth(5).map(PathBuf::from)
+    })
+}
+
+pub(crate) fn shell_matches(resource: &UserShellResource) -> bool {
+    current_shell()
+        .map(|shell| shell == resource.path)
+        .unwrap_or(false)
+}
+
+pub(crate) fn apply_shell(resource: &UserShellResource) -> Result<()> {
+    let status = ProcessCommand::new("chsh")
+        .arg("-s")
+        .arg(&resource.path)
+        .stdin(Stdio::null())
+        .status()
+        .with_context(|| "failed to run chsh")?;
+    if !status.success() {
+        bail!("failed to set shell to {}", resource.path.display());
+    }
+    Ok(())
+}
+
+pub(crate) fn current_groups() -> Result<BTreeSet<String>> {
+    let user = current_user().context("could not determine current user")?;
+    let output = ProcessCommand::new("id")
+        .arg("-nG")
+        .arg(&user)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| "failed to run id")?;
+    if !output.status.success() {
+        bail!("failed to list groups for {user}");
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect())
+}
+
+pub(crate) fn group_exists(resource: &UserGroupResource) -> Result<bool> {
+    Ok(current_groups()?.contains(&resource.name))
+}
+
+pub(crate) fn apply_group(resource: &UserGroupResource) -> Result<()> {
+    if std::env::consts::OS != "linux" {
+        bail!("user groups are only supported on Linux");
+    }
+    let user = current_user().context("could not determine current user")?;
+    let status = ProcessCommand::new("sudo")
+        .arg("usermod")
+        .arg("-aG")
+        .arg(&resource.name)
+        .arg(&user)
+        .status()
+        .with_context(|| "failed to run usermod")?;
+    if !status.success() {
+        bail!("failed to add {user} to group {}", resource.name);
+    }
+    Ok(())
+}
+
+fn current_user() -> Option<String> {
+    std::env::var("USER").ok().filter(|user| !user.is_empty())
+}

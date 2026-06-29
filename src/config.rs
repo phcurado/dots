@@ -15,6 +15,7 @@ use crate::symlink::{
     SymlinkDeclaration, SymlinkResource, expand_home, expand_symlink_declaration, resolve_source,
     same_path,
 };
+use crate::user::{UserConfig, UserGroupResource, resolve_shell};
 
 #[derive(Debug, Default)]
 pub(crate) struct Config {
@@ -24,6 +25,7 @@ pub(crate) struct Config {
     pub(crate) fonts: Vec<FontResource>,
     pub(crate) package_providers: BTreeMap<String, PackageProvider>,
     pub(crate) service_providers: BTreeMap<String, ServiceProvider>,
+    pub(crate) user: UserConfig,
 }
 
 pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
@@ -34,6 +36,8 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let service_providers = lua.create_table()?;
     let services = lua.create_table()?;
     let font_sources = lua.create_table()?;
+    let user_groups = lua.create_table()?;
+    let user_shell = lua.create_table()?;
     let dots = lua.create_table()?;
 
     let root = project.root.clone();
@@ -79,10 +83,29 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     })?;
     fonts.set("install", fonts_install)?;
 
+    let user = lua.create_table()?;
+    let collected_user_shell = user_shell.clone();
+    let shell = lua.create_function(move |_, shell: String| {
+        collected_user_shell.set("name", shell)?;
+        Ok(())
+    })?;
+    let collected_user_groups = user_groups.clone();
+    let groups = lua.create_function(move |lua, group_list: Table| {
+        for name in table_strings(Some(group_list))? {
+            let item = lua.create_table()?;
+            item.set("name", name)?;
+            collected_user_groups.raw_push(item)?;
+        }
+        Ok(())
+    })?;
+    user.set("shell", shell)?;
+    user.set("groups", groups)?;
+
     let platform = platform_table(&lua)?;
 
     dots.set("symlink", symlink)?;
     dots.set("fonts", fonts)?;
+    dots.set("user", user)?;
     dots.set("profile", profile)?;
     dots.set("platform", platform)?;
     dots.set("root", project.root.display().to_string())?;
@@ -152,6 +175,15 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             .fonts
             .extend(expand_font_source(&project.root, Some(&source?))?);
     }
+    if let Some(shell) = user_shell.get::<Option<String>>("name")? {
+        config.user.shell = Some(resolve_shell(&shell)?);
+    }
+    for item in user_groups.sequence_values::<Table>() {
+        let item = item?;
+        config.user.groups.push(UserGroupResource {
+            name: item.get::<String>("name")?,
+        });
+    }
     for pair in package_providers.pairs::<String, Table>() {
         let (name, item) = pair?;
         config.package_providers.insert(
@@ -214,6 +246,12 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     config
         .fonts
         .retain(|resource| font_ids.insert(crate::plan::font_id_for(resource)));
+
+    let mut group_names = BTreeSet::new();
+    config
+        .user
+        .groups
+        .retain(|resource| group_names.insert(resource.name.clone()));
 
     Ok(())
 }
@@ -619,6 +657,23 @@ mod tests {
                 && service.action == ServiceAction::Start
                 && service.name == "sketchybar"
         }));
+    }
+
+    #[test]
+    fn loads_user_settings() {
+        let project = temp_project(
+            r#"
+            dots.user.shell("sh")
+            dots.user.groups({ "docker", "docker" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        let shell = config.user.shell.unwrap();
+        assert_eq!(shell.name, "sh");
+        assert_eq!(config.user.groups.len(), 1);
+        assert_eq!(config.user.groups[0].name, "docker");
     }
 
     #[test]

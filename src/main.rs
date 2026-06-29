@@ -9,6 +9,7 @@ mod project;
 mod service;
 mod state;
 mod symlink;
+mod user;
 
 use anyhow::{Result, bail};
 use apply::apply_plan;
