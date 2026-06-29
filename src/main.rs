@@ -206,8 +206,13 @@ fn hostname() -> Option<String> {
 fn platform_table(lua: &Lua) -> Result<Table> {
     let table = lua.create_table()?;
     let os = platform_os();
-    let distro = linux_os_release().and_then(|values| values.get("ID").cloned());
-    let family = platform_family(distro.as_deref());
+    let os_release = if os == "linux" {
+        linux_os_release().unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
+    let distro = os_release.get("ID").cloned();
+    let family = platform_family(os, &os_release);
 
     table.set("system", format!("{}-{os}", std::env::consts::ARCH))?;
     table.set("arch", std::env::consts::ARCH)?;
@@ -225,30 +230,31 @@ fn platform_os() -> &'static str {
     }
 }
 
-fn platform_family(distro: Option<&str>) -> String {
-    match std::env::consts::OS {
-        "macos" => "darwin".to_string(),
-        "linux" => {
-            let values = linux_os_release().unwrap_or_default();
-            let id = distro.unwrap_or_default();
-            let id_like = values
-                .get("ID_LIKE")
-                .map(String::as_str)
-                .unwrap_or_default();
-            if id == "arch" || id_like.split_whitespace().any(|value| value == "arch") {
-                "arch".to_string()
-            } else if id == "debian"
-                || id == "ubuntu"
-                || id_like
-                    .split_whitespace()
-                    .any(|value| value == "debian" || value == "ubuntu")
-            {
-                "debian".to_string()
-            } else {
-                id.to_string()
-            }
-        }
+fn platform_family(os: &str, os_release: &BTreeMap<String, String>) -> String {
+    match os {
+        "darwin" => "darwin".to_string(),
+        "linux" => linux_family(os_release),
         os => os.to_string(),
+    }
+}
+
+fn linux_family(os_release: &BTreeMap<String, String>) -> String {
+    let id = os_release.get("ID").map(String::as_str).unwrap_or_default();
+    let id_like = os_release
+        .get("ID_LIKE")
+        .map(String::as_str)
+        .unwrap_or_default();
+    if id == "arch" || id_like.split_whitespace().any(|value| value == "arch") {
+        "arch".to_string()
+    } else if id == "debian"
+        || id == "ubuntu"
+        || id_like
+            .split_whitespace()
+            .any(|value| value == "debian" || value == "ubuntu")
+    {
+        "debian".to_string()
+    } else {
+        id.to_string()
     }
 }
 
@@ -1264,5 +1270,151 @@ fn dim(value: &str) -> String {
         value.dimmed().to_string()
     } else {
         value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn os_release(values: &[(&str, &str)]) -> BTreeMap<String, String> {
+        values
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
+    }
+
+    fn temp_project(config: &str) -> Project {
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("dots-test-{}-{id}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("dots.lua");
+        fs::write(&config_path, config).unwrap();
+        Project {
+            root,
+            config: config_path,
+        }
+    }
+
+    #[test]
+    fn missing_paths_are_not_the_same_path() {
+        let base = std::env::temp_dir().join(format!("dots-missing-{}", std::process::id()));
+        assert!(!same_path(&base.join("one"), &base.join("two")));
+    }
+
+    #[test]
+    fn detects_linux_package_family() {
+        assert_eq!(
+            platform_family("linux", &os_release(&[("ID", "arch")])),
+            "arch"
+        );
+        assert_eq!(
+            platform_family(
+                "linux",
+                &os_release(&[("ID", "ubuntu"), ("ID_LIKE", "debian")])
+            ),
+            "debian"
+        );
+        assert_eq!(
+            platform_family(
+                "linux",
+                &os_release(&[("ID", "pop"), ("ID_LIKE", "ubuntu debian")])
+            ),
+            "debian"
+        );
+    }
+
+    #[test]
+    fn darwin_family_is_darwin() {
+        assert_eq!(platform_family("darwin", &BTreeMap::new()), "darwin");
+    }
+
+    #[test]
+    fn explicit_profile_wins() {
+        assert_eq!(selected_profile(Some("work")).unwrap(), "work");
+    }
+
+    #[test]
+    fn loads_lua_package_provider() {
+        let project = temp_project(
+            r#"
+            dots.provider.package("fake", {
+              available = "exit 0",
+              installed = "exit 1",
+              install = "exit 0",
+              remove = "exit 0",
+            })
+
+            dots.fake.install({ "one", "two" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(config.package_providers.contains_key("fake"));
+        assert_eq!(config.packages.len(), 2);
+        assert!(
+            config
+                .packages
+                .iter()
+                .any(|package| package.provider == "fake" && package.name == "one")
+        );
+        assert!(
+            config
+                .packages
+                .iter()
+                .any(|package| package.provider == "fake" && package.name == "two")
+        );
+    }
+
+    #[test]
+    fn plan_does_not_check_provider_availability() {
+        let mut config = Config::default();
+        config.package_providers.insert(
+            "fake".to_string(),
+            PackageProvider {
+                available: "exit 1".to_string(),
+                installed: "exit 1".to_string(),
+                install: "exit 0".to_string(),
+                remove: "exit 0".to_string(),
+            },
+        );
+        config.packages.push(PackageResource {
+            provider: "fake".to_string(),
+            name: "bat".to_string(),
+        });
+
+        let plan = build_plan(&config, &State::default()).unwrap();
+
+        assert!(matches!(plan.as_slice(), [PlanStep::PackageCreate { .. }]));
+    }
+
+    #[test]
+    fn installed_packages_are_not_auto_tracked_by_refresh() {
+        let mut config = Config::default();
+        config.package_providers.insert(
+            "fake".to_string(),
+            PackageProvider {
+                available: "exit 0".to_string(),
+                installed: "exit 0".to_string(),
+                install: "exit 0".to_string(),
+                remove: "exit 0".to_string(),
+            },
+        );
+        config.packages.push(PackageResource {
+            provider: "fake".to_string(),
+            name: "bat".to_string(),
+        });
+        let mut state = State::default();
+
+        refresh_state_from_system(&config, &mut state).unwrap();
+        let plan = build_plan(&config, &state).unwrap();
+
+        assert!(state.resources.is_empty());
+        assert!(matches!(plan.as_slice(), [PlanStep::PackageNoop(_)]));
     }
 }
