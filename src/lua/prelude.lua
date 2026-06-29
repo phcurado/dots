@@ -25,3 +25,12 @@ dots.provider.package("brew", {
 	install = 'brew install "$DOTS_PACKAGE"',
 	remove = 'brew uninstall "$DOTS_PACKAGE"',
 })
+
+dots.provider.package("brew-cask", {
+	available = "command -v brew >/dev/null",
+	installed = 'brew list --cask "$DOTS_PACKAGE" >/dev/null 2>&1',
+	install = 'brew install --cask "$DOTS_PACKAGE"',
+	remove = 'brew uninstall --cask "$DOTS_PACKAGE"',
+})
+
+dots.brew.cask = dots["brew-cask"].install

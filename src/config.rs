@@ -258,3 +258,158 @@ fn table_strings(table: Option<Table>) -> mlua::Result<Vec<String>> {
     }
     Ok(values)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_project(config: &str) -> Project {
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("dots-config-test-{}-{id}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("dots.lua");
+        fs::write(&config_path, config).unwrap();
+        Project {
+            root,
+            config: config_path,
+        }
+    }
+
+    #[test]
+    fn resolves_symlink_paths_from_config() {
+        let project = temp_project(r#"dots.symlink("~/.zshrc", ".zshrc")"#);
+        fs::write(project.root.join(".zshrc"), "").unwrap();
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.symlinks.len(), 1);
+        assert_eq!(config.symlinks[0].target, expand_home("~/.zshrc"));
+        assert_eq!(config.symlinks[0].source, project.root.join(".zshrc"));
+    }
+
+    #[test]
+    fn duplicate_symlink_target_with_same_source_is_deduped() {
+        let project = temp_project(
+            r#"
+            dots.symlink("/tmp/dots-test-target", "source")
+            dots.symlink("/tmp/dots-test-target", "source")
+            "#,
+        );
+        fs::write(project.root.join("source"), "").unwrap();
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.symlinks.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_symlink_target_with_different_source_errors() {
+        let project = temp_project(
+            r#"
+            dots.symlink("/tmp/dots-test-target", "one")
+            dots.symlink("/tmp/dots-test-target", "two")
+            "#,
+        );
+        fs::write(project.root.join("one"), "").unwrap();
+        fs::write(project.root.join("two"), "").unwrap();
+
+        let error = load_config(&project, "test").unwrap_err().to_string();
+
+        assert!(error.contains("duplicate symlink target"));
+    }
+
+    #[test]
+    fn expands_stow_style_directory_and_applies_ignore() {
+        let project = temp_project(
+            r#"
+            dots.symlink("TARGET", "home", {
+              ignore = { "skip/**" },
+            })
+            "#,
+        );
+        let target = project.root.join("target-home");
+        fs::create_dir_all(project.root.join("home/.config/nvim")).unwrap();
+        fs::create_dir_all(project.root.join("home/skip")).unwrap();
+        fs::create_dir_all(target.join(".config")).unwrap();
+        fs::write(project.root.join("home/.config/nvim/init.lua"), "").unwrap();
+        fs::write(project.root.join("home/skip/file"), "").unwrap();
+        let source = fs::read_to_string(&project.config)
+            .unwrap()
+            .replace("TARGET", &target.display().to_string());
+        fs::write(&project.config, source).unwrap();
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(config.symlinks.iter().any(|resource| {
+            resource.target == target.join(".config/nvim")
+                && resource.source == project.root.join("home/.config/nvim")
+        }));
+        assert!(
+            config
+                .symlinks
+                .iter()
+                .all(|resource| !resource.target.starts_with(target.join("skip")))
+        );
+    }
+
+    #[test]
+    fn duplicate_packages_are_deduped() {
+        let project = temp_project(r#"dots.paru.install({ "bat", "bat" })"#);
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.packages.len(), 1);
+        assert_eq!(config.packages[0].provider, "paru");
+        assert_eq!(config.packages[0].name, "bat");
+    }
+
+    #[test]
+    fn loads_brew_casks() {
+        let project = temp_project(r#"dots.brew.cask({ "ghostty" })"#);
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(config.package_providers.contains_key("brew-cask"));
+        assert_eq!(config.packages.len(), 1);
+        assert_eq!(config.packages[0].provider, "brew-cask");
+        assert_eq!(config.packages[0].name, "ghostty");
+    }
+
+    #[test]
+    fn loads_lua_package_provider() {
+        let project = temp_project(
+            r#"
+            dots.provider.package("fake", {
+              available = "exit 0",
+              installed = "exit 1",
+              install = "exit 0",
+              remove = "exit 0",
+            })
+
+            dots.fake.install({ "one", "two" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(config.package_providers.contains_key("fake"));
+        assert_eq!(config.packages.len(), 2);
+        assert!(
+            config
+                .packages
+                .iter()
+                .any(|package| package.provider == "fake" && package.name == "one")
+        );
+        assert!(
+            config
+                .packages
+                .iter()
+                .any(|package| package.provider == "fake" && package.name == "two")
+        );
+    }
+}

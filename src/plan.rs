@@ -159,3 +159,52 @@ pub(crate) fn state_package(resource: &PackageResource) -> StateResource {
 pub(crate) fn package_id_for(resource: &PackageResource) -> String {
     format!("package:{}:{}", resource.provider, resource.name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_provider(available: &str, installed: &str) -> PackageProvider {
+        PackageProvider {
+            available: available.to_string(),
+            installed: installed.to_string(),
+            install: "exit 0".to_string(),
+            remove: "exit 0".to_string(),
+        }
+    }
+
+    #[test]
+    fn plan_does_not_check_provider_availability() {
+        let mut config = Config::default();
+        config
+            .package_providers
+            .insert("fake".to_string(), fake_provider("exit 1", "exit 1"));
+        config.packages.push(PackageResource {
+            provider: "fake".to_string(),
+            name: "bat".to_string(),
+        });
+
+        let plan = build_plan(&config, &State::default()).unwrap();
+
+        assert!(matches!(plan.as_slice(), [PlanStep::PackageCreate { .. }]));
+    }
+
+    #[test]
+    fn installed_packages_are_not_auto_tracked_by_refresh() {
+        let mut config = Config::default();
+        config
+            .package_providers
+            .insert("fake".to_string(), fake_provider("exit 0", "exit 0"));
+        config.packages.push(PackageResource {
+            provider: "fake".to_string(),
+            name: "bat".to_string(),
+        });
+        let mut state = State::default();
+
+        refresh_state_from_system(&config, &mut state).unwrap();
+        let plan = build_plan(&config, &state).unwrap();
+
+        assert!(state.resources.is_empty());
+        assert!(matches!(plan.as_slice(), [PlanStep::PackageNoop(_)]));
+    }
+}

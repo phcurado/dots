@@ -7,6 +7,7 @@ dots.pacman.install({ "base-devel", "git" })
 dots.paru.install({ "bat", "ripgrep" })
 dots.apt.install({ "bat", "ripgrep" })
 dots.brew.install({ "bat", "ripgrep" })
+dots.brew.cask({ "ghostty" })
 ```
 
 Built in providers:
@@ -15,6 +16,7 @@ Built in providers:
 - `paru`
 - `apt`
 - `brew`
+- `brew-cask` through `dots.brew.cask(...)`
 
 Use platform facts to choose the right provider for the current machine:
 
@@ -29,6 +31,7 @@ elseif dots.platform.family == "debian" then
 elseif dots.os == "macos" then
   dots.brew.install(common_packages)
   dots.brew.install({ "wget" })
+  dots.brew.cask({ "ghostty" })
 end
 ```
 
@@ -55,6 +58,7 @@ elseif dots.platform.family == "debian" then
 elseif dots.os == "macos" then
   dots.brew.install(common_packages)
   dots.brew.install({ "wget" })
+  dots.brew.cask({ "ghostty", "obsidian" })
 end
 ```
 
@@ -98,7 +102,7 @@ Packages:
 
 The built-ins live in Lua, not hardcoded Rust, under `src/lua/prelude.lua`.
 
-`brew` is registered like this:
+`brew` formulae are registered like this:
 
 ```lua
 dots.provider.package("brew", {
@@ -107,6 +111,19 @@ dots.provider.package("brew", {
   install = 'brew install "$DOTS_PACKAGE"',
   remove = 'brew uninstall "$DOTS_PACKAGE"',
 })
+```
+
+Casks use a separate provider and the shorter `dots.brew.cask(...)` helper:
+
+```lua
+dots.provider.package("brew-cask", {
+  available = "command -v brew >/dev/null",
+  installed = 'brew list --cask "$DOTS_PACKAGE" >/dev/null 2>&1',
+  install = 'brew install --cask "$DOTS_PACKAGE"',
+  remove = 'brew uninstall --cask "$DOTS_PACKAGE"',
+})
+
+dots.brew.cask = dots["brew-cask"].install
 ```
 
 Each command runs through `sh -c`. The current package name is available as
