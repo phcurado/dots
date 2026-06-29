@@ -14,11 +14,12 @@ use anyhow::{Result, bail};
 use apply::apply_plan;
 use clap::{Parser, Subcommand};
 use config::load_config;
-use output::{bold, print_plan, print_state, print_state_initialized};
+use output::{bold, print_plan, print_state, print_state_initialized, summarize_plan};
 use plan::{build_plan, refresh_state_from_system};
 use platform::selected_profile;
 use project::{Project, find_project};
 use state::{State, load_state, save_state};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use symlink::expand_home;
 
@@ -86,6 +87,7 @@ fn main() -> Result<()> {
             save_state(&state_path, &state)?;
             let plan = build_plan(&config, &state)?;
             print_plan(&project, &plan);
+            confirm_apply(&plan)?;
             apply_plan(&plan, &mut state)?;
             save_state(&state_path, &state)?;
         }
@@ -94,6 +96,25 @@ fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn confirm_apply(plan: &[plan::PlanStep]) -> Result<()> {
+    let summary = summarize_plan(plan);
+    if summary.conflicts > 0 || summary.create + summary.update + summary.remove == 0 {
+        return Ok(());
+    }
+
+    println!();
+    println!("Type 'yes' to apply this plan.");
+    print!("Apply? ");
+    io::stdout().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if answer.trim() != "yes" {
+        bail!("apply cancelled");
+    }
     Ok(())
 }
 

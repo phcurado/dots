@@ -1,5 +1,6 @@
 use std::fs;
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -48,4 +49,42 @@ fn plan_prints_symlink_and_package_changes() {
     assert!(stdout.contains("+ symlink ~/.zshrc -> .zshrc"));
     assert!(stdout.contains("+ fake bat"));
     assert!(stdout.contains("Plan: 2 to create, 0 to update, 0 to destroy."));
+}
+
+#[test]
+fn apply_requires_yes() {
+    let root = temp_dir("cli-apply-confirm");
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        dots.provider.package("fake", {
+          available = "exit 0",
+          installed = "exit 1",
+          install = "exit 0",
+          remove = "exit 0",
+        })
+
+        dots.fake.install({ "bat" })
+        "#,
+    )
+    .unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("apply")
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.as_mut().unwrap().write_all(b"no\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stdout.contains("Type 'yes' to apply this plan."));
+    assert!(stderr.contains("apply cancelled"));
 }
