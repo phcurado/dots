@@ -16,18 +16,21 @@ make install
 
 ## Create a config
 
-In your dotfiles repo, add `dots.lua`:
+Create a dotfiles repo, or use your existing one, and add `dots.lua`:
 
 ```lua
 dots.symlink("~/.config/nvim", ".config/nvim")
 dots.symlink("~/.config/tmux", ".config/tmux")
 dots.symlink("~/.zshrc", ".zshrc")
 
+local common_packages = { "bat", "ripgrep" }
+
 if dots.platform.family == "arch" then
   dots.pacman.install({ "base-devel", "git", "paru" })
-  dots.paru.install({ "bat", "ripgrep" })
+  dots.paru.install(common_packages)
 elseif dots.os == "macos" then
-  dots.brew.install({ "bat", "ripgrep" })
+  dots.brew.install(common_packages)
+  dots.brew.install({ "wget" })
 end
 ```
 

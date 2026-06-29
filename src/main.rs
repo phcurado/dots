@@ -1114,26 +1114,19 @@ fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
 fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
     let mut tracked = 0;
     for step in plan {
-        match step {
-            PlanStep::SymlinkNoop(resource) => {
-                if state
-                    .resources
-                    .insert(symlink_id_for(resource), state_symlink(resource))
-                    .is_none()
-                {
-                    tracked += 1;
-                }
-            }
-            PlanStep::PackageNoop(resource) => {
-                if state
-                    .resources
-                    .insert(package_id_for(resource), state_package(resource))
-                    .is_none()
-                {
-                    tracked += 1;
-                }
-            }
-            _ => {}
+        let inserted = match step {
+            PlanStep::SymlinkNoop(resource) => state
+                .resources
+                .insert(symlink_id_for(resource), state_symlink(resource))
+                .is_none(),
+            PlanStep::PackageNoop(resource) => state
+                .resources
+                .insert(package_id_for(resource), state_package(resource))
+                .is_none(),
+            _ => false,
+        };
+        if inserted {
+            tracked += 1;
         }
     }
     tracked

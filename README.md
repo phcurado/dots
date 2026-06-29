@@ -2,7 +2,7 @@
 
 # dots
 
-**Declarative dotfiles and workstation setup.**
+**Manage your dotfiles declaratively, never waste time configuring your OS again**
 
 **[Docs](docs/index.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
 **[Quick start](docs/quick-start.md) &nbsp;&nbsp;•&nbsp;&nbsp;**

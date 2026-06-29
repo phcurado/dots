@@ -19,13 +19,16 @@ Built in providers:
 Use platform facts to choose the right provider for the current machine:
 
 ```lua
+local common_packages = { "bat", "ripgrep" }
+
 if dots.platform.family == "arch" then
   dots.pacman.install({ "base-devel", "git", "paru" })
-  dots.paru.install({ "bat", "fd", "ripgrep" })
+  dots.paru.install(common_packages)
 elseif dots.platform.family == "debian" then
-  dots.apt.install({ "bat", "fd-find", "ripgrep" })
+  dots.apt.install(common_packages)
 elseif dots.os == "macos" then
-  dots.brew.install({ "bat", "fd", "ripgrep" })
+  dots.brew.install(common_packages)
+  dots.brew.install({ "wget" })
 end
 ```
 
@@ -37,21 +40,33 @@ Ubuntu, and other Debian-like systems use `debian`.
 Use plain Lua tables for groups you want to reuse:
 
 ```lua
-local cli = {
+local common_packages = {
   "bat",
   "btop",
-  "fd",
   "ripgrep",
   "tmux",
   "zoxide",
 }
 
 if dots.platform.family == "arch" then
-  dots.paru.install(cli)
+  dots.paru.install(common_packages)
 elseif dots.platform.family == "debian" then
-  dots.apt.install({ "bat", "btop", "fd-find", "ripgrep", "tmux", "zoxide" })
+  dots.apt.install(common_packages)
 elseif dots.os == "macos" then
-  dots.brew.install(cli)
+  dots.brew.install(common_packages)
+  dots.brew.install({ "wget" })
+end
+```
+
+Keep distro-specific package names separate when they differ:
+
+```lua
+if dots.platform.family == "arch" then
+  dots.paru.install({ "fd" })
+elseif dots.platform.family == "debian" then
+  dots.apt.install({ "fd-find" })
+elseif dots.os == "macos" then
+  dots.brew.install({ "fd" })
 end
 ```
 
@@ -83,14 +98,14 @@ Packages:
 
 The built-ins live in Lua, not hardcoded Rust, under `src/lua/prelude.lua`.
 
-`paru` is registered like this:
+`brew` is registered like this:
 
 ```lua
-dots.provider.package("paru", {
-  available = "command -v paru >/dev/null",
-  installed = "paru -Q \"$DOTS_PACKAGE\" >/dev/null 2>&1",
-  install = "paru -S --needed \"$DOTS_PACKAGE\"",
-  remove = "paru -Rns \"$DOTS_PACKAGE\"",
+dots.provider.package("brew", {
+  available = "command -v brew >/dev/null",
+  installed = 'brew list --formula "$DOTS_PACKAGE" >/dev/null 2>&1',
+  install = 'brew install "$DOTS_PACKAGE"',
+  remove = 'brew uninstall "$DOTS_PACKAGE"',
 })
 ```
 
