@@ -1,42 +1,50 @@
 # Symlinks
 
-Symlinks are declared with `dots.symlink(target, source)`:
+Programs usually look for config files in fixed places: `~/.zshrc`,
+`~/.gitconfig`, `~/.config/nvim`, and so on. A dotfiles repo keeps those files
+in one checkout. Symlinks connect the checkout to the paths programs already
+use.
+
+A symlink is declared with `dots.symlink(target, source)`:
 
 ```lua
 dots.symlink("~/.config/nvim", ".config/nvim")
 dots.symlink("~/.zshrc", ".zshrc")
 ```
 
-The first path is where the link should live. The second path is the file or
-directory in the repo.
+The first path is where the link should be created. The second path points to
+the file or directory in the repo.
 
 ```text
 ~/.config/nvim -> <repo>/.config/nvim
 ~/.zshrc       -> <repo>/.zshrc
 ```
 
-Relative sources are resolved from the project root, so the same config works
-from any checkout path.
+Relative source paths are resolved from the directory that contains `dots.lua`.
+That means the config still works if you clone the repo somewhere else.
 
 ## Files and directories
 
-Link a whole config directory:
+A directory can be linked as one unit:
 
 ```lua
 dots.symlink("~/.config/nvim", ".config/nvim")
 ```
 
-Or keep it file-by-file:
+A file can also be linked directly:
 
 ```lua
 dots.symlink("~/.gitconfig", ".gitconfig")
 dots.symlink("~/.config/starship.toml", ".config/starship.toml")
 ```
 
-## Stow-style repos
+Use whichever shape matches the repo. `dots` does not require a special folder
+layout.
 
-For repos that mirror `$HOME`, point `~` at the repo root and ignore files that
-should stay private to the repo:
+## Repos that mirror `$HOME`
+
+Some dotfiles repos are laid out like a home directory. In that case, you can
+point `~` at the repo root:
 
 ```lua
 dots.symlink("~", ".", {
@@ -50,8 +58,11 @@ dots.symlink("~", ".", {
 })
 ```
 
-Existing directories are preserved. If `~/.config` already exists and the repo
-contains `.config/nvim`, `dots` links the child:
+The `ignore` list keeps repo-only files from being linked into your home
+directory.
+
+`dots` also avoids replacing existing directories. If `~/.config` already exists
+and the repo contains `.config/nvim`, `dots` creates this link:
 
 ```text
 ~/.config/nvim -> <repo>/.config/nvim
@@ -61,9 +72,9 @@ It does not replace the whole `~/.config` directory.
 
 ## Conflicts
 
-`dots` is conservative. It will not adopt or overwrite existing files.
+`dots` will not adopt or overwrite existing files.
 
-If a target already exists and is not the symlink declared in config, the plan
+If a target already exists and it is not the symlink declared in config, the plan
 shows a conflict:
 
 ```diff
@@ -71,25 +82,25 @@ Symlinks:
   ! symlink ~/.zshrc (target exists and is not a symlink)
 ```
 
-Fix the file manually, then run `dots plan` again.
+Move the file yourself, then run `dots plan` again.
 
 ## Plan output
 
-New link:
+A new link looks like this:
 
 ```diff
 Symlinks:
   + symlink ~/.zshrc -> .zshrc
 ```
 
-Changed managed link:
+If a managed link points somewhere else, the plan shows an update:
 
 ```diff
 Symlinks:
   ~ symlink ~/.zshrc -> .zshrc
 ```
 
-Link removed from config:
+If you remove a link from config, the plan shows a destroy:
 
 ```diff
 Symlinks:

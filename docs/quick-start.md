@@ -1,5 +1,8 @@
 # Quick start
 
+Let's create a small config and ask `dots` what it would do. You can do this in
+a new dotfiles repo or in a repo you already use.
+
 ## Install
 
 Install the latest release:
@@ -8,7 +11,7 @@ Install the latest release:
 curl -fsSL https://raw.githubusercontent.com/phcurado/dots/main/install.sh | sh
 ```
 
-From source:
+If you're working from a local checkout of `dots`, use the Makefile instead:
 
 ```sh
 make install
@@ -16,7 +19,7 @@ make install
 
 ## Create a config
 
-Create a dotfiles repo, or use your existing one, and add `dots.lua`:
+Add `dots.lua` to your dotfiles repo:
 
 ```lua
 dots.symlink("~/.config/nvim", ".config/nvim")
@@ -34,13 +37,19 @@ elseif dots.os == "macos" then
 end
 ```
 
-Use platform checks when the same repo is shared across machines.
+The symlink lines say where files from the repo should appear in your home
+directory. The package block uses platform facts so the same config can run on
+Arch and macOS.
 
-## Plan
+## Run a plan
+
+Run this from inside the dotfiles repo:
 
 ```sh
 dots plan
 ```
+
+On a fresh machine, the output should look similar to this:
 
 ```diff
 Initializing state: .dots/state.json
@@ -60,10 +69,16 @@ Packages:
 Plan: 8 to create, 0 to update, 0 to destroy.
 ```
 
-## Apply
+If a file already exists where a symlink should go, `dots` will report a
+conflict instead of overwriting it.
+
+## Apply the plan
+
+When the plan looks right, apply it:
 
 ```sh
 dots apply
 ```
 
-After apply, `dots` records the managed resources in `.dots/state.json`.
+`dots` writes `.dots/state.json` in the repo after applying. Keep that file local
+to the machine.

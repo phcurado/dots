@@ -1,11 +1,17 @@
 # Platforms and profiles
 
-Use platform facts for operating-system decisions, and profiles for host or
-persona decisions.
+A single dotfiles repo can usually cover more than one machine. Most files may
+be shared, while package managers, services, or a few personal files vary by
+system.
+
+`dots` gives you two ways to branch the config:
+
+- use platform facts for OS and distro decisions
+- use profiles for host or persona decisions
 
 ## Platform
 
-`dots.platform` is detected when the config is loaded:
+`dots.platform` is available while `dots.lua` is running:
 
 ```lua
 if dots.platform.system == "x86_64-linux" then
@@ -19,7 +25,7 @@ elseif dots.platform.family == "debian" then
 end
 ```
 
-Available fields:
+The available fields are:
 
 | Field                    | Example          |
 | ------------------------ | ---------------- |
@@ -30,15 +36,16 @@ Available fields:
 | `dots.platform.family`   | `arch`, `debian` |
 | `dots.platform.hostname` | `thinkpad`       |
 
-`system` follows the Nix-style `<arch>-<os>` shape, such as `x86_64-linux` or
-`aarch64-darwin`.
+`system` uses the same shape as Nix systems: `<arch>-<os>`. Examples include
+`x86_64-linux` and `aarch64-darwin`.
 
 On Linux, `distro` and `family` come from `/etc/os-release`. Ubuntu and Debian
 both use `family = "debian"`; Arch uses `family = "arch"`.
 
 ## Profiles
 
-Profiles are explicit config targets:
+Use profiles when the OS is not enough. For example, two Linux machines might
+share packages but use different Git identities.
 
 ```lua
 if dots.profile == "work" then
@@ -55,7 +62,7 @@ dots --profile work plan
 dots --profile work apply
 ```
 
-Or use an environment variable:
+You can also set an environment variable:
 
 ```sh
 DOTS_PROFILE=work dots plan

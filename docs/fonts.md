@@ -1,6 +1,10 @@
 # Fonts
 
-Put local fonts in the repo under `fonts/`:
+Keep font files in the repo and let `dots` install them for the current OS. On
+Linux, that means copying them to your user font directory and refreshing
+fontconfig. On macOS, it means copying them to your user Fonts folder.
+
+The default layout is:
 
 ```text
 fonts/
@@ -8,42 +12,38 @@ fonts/
   0xProtoNerdFont-Bold.ttf
 ```
 
-Then add this to `dots.lua`:
+With that layout, add this to `dots.lua`:
 
 ```lua
 dots.fonts.install()
 ```
 
-If you keep fonts somewhere else, pass the directory:
+If you use a different directory, pass it explicitly:
 
 ```lua
 dots.fonts.install("assets/fonts")
 ```
 
-`dots` copies fonts instead of symlinking them, so the same config works on
-Linux and macOS.
+## What gets installed
 
-## Supported files
-
-`dots` looks for font files under the directory you pass. If that directory has
-nested folders, it walks through those too.
-
-Supported extensions:
+`dots` walks the font directory and installs files with these extensions:
 
 - `.ttf`
 - `.otf`
 - `.ttc`
 - `.otc`
 
+Other files are ignored, so license files and notes can stay next to the fonts.
+
 ## Linux
 
-Fonts are copied to:
+On Linux, fonts are copied to:
 
 ```text
 ~/.local/share/fonts/dots/
 ```
 
-After apply, `dots` refreshes the font cache:
+After apply, `dots` runs:
 
 ```sh
 fc-cache -f ~/.local/share/fonts/dots
@@ -51,13 +51,17 @@ fc-cache -f ~/.local/share/fonts/dots
 
 ## macOS
 
-Fonts are copied to:
+On macOS, fonts are copied to:
 
 ```text
 ~/Library/Fonts/dots/
 ```
 
+No extra cache command is needed.
+
 ## Plan output
+
+A new font looks like this:
 
 ```diff
 Fonts:

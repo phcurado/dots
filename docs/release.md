@@ -1,6 +1,6 @@
 # Release
 
-Releases are built from tags.
+Releases are created by pushing a tag:
 
 ```sh
 git tag v0.1.0

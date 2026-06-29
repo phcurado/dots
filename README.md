@@ -2,7 +2,7 @@
 
 # dots
 
-**Manage your dotfiles declaratively, never waste time configuring your OS again**
+**Manage your dotfiles declaratively, without configuring each machine by hand**
 
 **[Docs](docs/index.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
 **[Quick start](docs/quick-start.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
@@ -14,9 +14,13 @@
 
 ## Introduction
 
-`dots` brings a Terraform-style workflow to a dotfiles repo: declare the setup,
-review the plan, then apply it. It manages symlinks, package installs, and local
-state without taking over files it does not own.
+`dots` lets you run a dotfiles repo with a plan/apply workflow. Describe the
+setup you want, check the diff with `dots plan`, then apply it with
+`dots apply`.
+
+You can start small. Keep your current repo layout, move one thing at a time,
+and let `dots` manage only the parts you declare: symlinks, packages, services,
+fonts, and local state.
 
 ## Quick start
 
@@ -26,7 +30,7 @@ Install the latest release:
 curl -fsSL https://raw.githubusercontent.com/phcurado/dots/main/install.sh | sh
 ```
 
-Create a dotfiles repo, or use your existing one, and add `dots.lua`:
+Now create a dotfiles repo, or use the one you already have, and add `dots.lua`:
 
 ```lua
 dots.symlink("~/.config/nvim", ".config/nvim")
@@ -44,11 +48,13 @@ elseif dots.os == "macos" then
 end
 ```
 
-Check the plan:
+Run a plan:
 
 ```sh
 dots plan
 ```
+
+On a fresh machine, you should see something like this:
 
 ```diff
 Initializing state: .dots/state.json
@@ -68,11 +74,11 @@ Packages:
 Plan: 8 to create, 0 to update, 0 to destroy.
 ```
 
-Apply it:
+If the plan looks right, apply it:
 
 ```sh
 dots apply
 ```
 
-For the full config API, state commands, and provider examples, see the
-[docs](docs/index.md).
+See the [docs](docs/index.md) for symlinks, packages, services, fonts, profiles,
+and state.

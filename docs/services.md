@@ -1,6 +1,10 @@
 # Services
 
-Services describe things that should be enabled or running.
+Some tools need a service to be running after the package is installed. Docker is
+a good example on Linux. SketchyBar and Borders are good examples on macOS when
+they are managed by Homebrew services.
+
+Declare those services next to the rest of the machine setup:
 
 ```lua
 if dots.platform.family == "arch" then
@@ -11,26 +15,34 @@ elseif dots.os == "macos" then
 end
 ```
 
-`enable` and `start` are separate on purpose. On Linux, `enable` controls boot
-startup and `start` controls the current session.
+`enable` and `start` are separate. On Linux, `enable` controls whether the unit
+starts at boot. `start` controls whether it is running now.
 
 ## systemd
 
+Use `enable` when the unit should start on boot:
+
 ```lua
 dots.systemd.enable({ "docker.service" })
+```
+
+Use `start` when the unit should be active now:
+
+```lua
 dots.systemd.start({ "docker.service" })
 ```
 
-if you remove the declaration above, the following actions will be planned/applied:
+If you remove those declarations later, `dots` plans the reverse operation:
 
 - `enable` becomes `disable`
 - `start` becomes `stop`
 
 ## Homebrew services
 
+Homebrew services currently support `start`:
+
 ```lua
 dots.brew.service.start({ "sketchybar", "borders" })
 ```
 
-Homebrew services currently support `start`. Removing the declaration runs
-`brew services stop`.
+If you remove the declaration, `dots` runs `brew services stop` for that service.
