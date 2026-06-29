@@ -6,6 +6,7 @@ Package managers are exposed as Lua namespaces:
 dots.pacman.install({ "base-devel", "git" })
 dots.paru.install({ "bat", "ripgrep" })
 dots.apt.install({ "bat", "ripgrep" })
+dots.brew.install({ "bat", "ripgrep" })
 ```
 
 Built in providers:
@@ -13,6 +14,7 @@ Built in providers:
 - `pacman`
 - `paru`
 - `apt`
+- `brew`
 
 Use platform facts to choose the right provider for the current machine:
 
@@ -22,6 +24,8 @@ if dots.platform.family == "arch" then
   dots.paru.install({ "bat", "fd", "ripgrep" })
 elseif dots.platform.family == "debian" then
   dots.apt.install({ "bat", "fd-find", "ripgrep" })
+elseif dots.os == "macos" then
+  dots.brew.install({ "bat", "fd", "ripgrep" })
 end
 ```
 
@@ -46,6 +50,8 @@ if dots.platform.family == "arch" then
   dots.paru.install(cli)
 elseif dots.platform.family == "debian" then
   dots.apt.install({ "bat", "btop", "fd-find", "ripgrep", "tmux", "zoxide" })
+elseif dots.os == "macos" then
+  dots.brew.install(cli)
 end
 ```
 

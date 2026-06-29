@@ -8,10 +8,12 @@ The docs match the current `main` branch.
 ## Start here
 
 - [Quick start](quick-start.md): install `dots`, create a config, and run your first plan.
+- [Install](install.md): install script and source install.
 - [Platforms and profiles](platforms-and-profiles.md): target systems, distros, hosts, and profiles.
 - [Symlinks](symlinks.md): link files and directories from the repo into `$HOME`.
 - [Packages](packages.md): use `pacman`, `paru`, `apt`, or your own package provider.
 - [State](state.md): inspect or forget resources tracked by `dots`.
+- [Release](release.md): tag-based GitHub releases.
 
 ## Workflow
 

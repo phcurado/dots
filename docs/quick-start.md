@@ -2,13 +2,17 @@
 
 ## Install
 
-From this repo:
+Install the latest release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/phcurado/dots/main/install.sh | sh
+```
+
+From source:
 
 ```sh
 make install
 ```
-
-This installs `dots` to `~/.local/bin/dots`.
 
 ## Create a config
 
@@ -22,23 +26,17 @@ dots.symlink("~/.zshrc", ".zshrc")
 if dots.platform.family == "arch" then
   dots.pacman.install({ "base-devel", "git", "paru" })
   dots.paru.install({ "bat", "ripgrep" })
-elseif dots.platform.family == "debian" then
-  dots.apt.install({ "bat", "ripgrep" })
-end
-
-if dots.profile == "work" then
-  dots.symlink("~/.gitconfig", "profiles/work/gitconfig")
+elseif dots.os == "macos" then
+  dots.brew.install({ "bat", "ripgrep" })
 end
 ```
 
-`dots.platform.family` is for system choices such as Arch vs Debian.
-`dots.profile` is for machine or persona choices. By default it uses the
-hostname, but you can pass one explicitly.
+Use platform checks when the same repo is shared across machines.
 
 ## Plan
 
 ```sh
-dots --profile work plan
+dots plan
 ```
 
 ```diff
@@ -48,7 +46,6 @@ Symlinks:
   + symlink ~/.config/nvim -> .config/nvim
   + symlink ~/.config/tmux -> .config/tmux
   + symlink ~/.zshrc -> .zshrc
-  + symlink ~/.gitconfig -> profiles/work/gitconfig
 
 Packages:
   + pacman base-devel
@@ -57,13 +54,13 @@ Packages:
   + paru bat
   + paru ripgrep
 
-Plan: 9 to create, 0 to update, 0 to destroy.
+Plan: 8 to create, 0 to update, 0 to destroy.
 ```
 
 ## Apply
 
 ```sh
-dots --profile work apply
+dots apply
 ```
 
 After apply, `dots` records the managed resources in `.dots/state.json`.
