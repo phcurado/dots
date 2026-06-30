@@ -72,17 +72,25 @@ It does not replace the whole `~/.config` directory.
 
 ## Conflicts
 
-`dots` will not adopt or overwrite existing files.
+`dots` is conservative with existing files.
 
-If a target already exists and it is not the symlink declared in config, the plan
-shows a conflict:
+If a regular file already exists at the target and has the same contents as the
+repo file, `dots` can replace it with the symlink during apply:
+
+```diff
+Symlinks:
+  ~ symlink ~/.zshrc -> .zshrc
+```
+
+If the existing file is different, or the target is a directory that cannot be
+expanded safely, the plan shows a conflict:
 
 ```diff
 Symlinks:
   ! symlink ~/.zshrc (target exists and is not a symlink)
 ```
 
-Move the file yourself, then run `dots plan` again.
+To fix this, you can move or copy the file to the correct path, then run `dots plan` again.
 
 ## Plan output
 

@@ -142,6 +142,22 @@ pub(crate) fn symlink_matches(resource: &SymlinkResource) -> Result<bool> {
     Ok(same_path(&current, &resource.source))
 }
 
+pub(crate) fn regular_file_matches(resource: &SymlinkResource) -> Result<bool> {
+    let Ok(target_meta) = fs::symlink_metadata(&resource.target) else {
+        return Ok(false);
+    };
+    let Ok(source_meta) = fs::symlink_metadata(&resource.source) else {
+        return Ok(false);
+    };
+    if !target_meta.is_file() || !source_meta.is_file() {
+        return Ok(false);
+    }
+    if target_meta.len() != source_meta.len() {
+        return Ok(false);
+    }
+    Ok(fs::read(&resource.target)? == fs::read(&resource.source)?)
+}
+
 pub(crate) fn resolve_symlink_target(target: &Path, link: &Path) -> PathBuf {
     if link.is_absolute() {
         link.to_path_buf()

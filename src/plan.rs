@@ -10,8 +10,8 @@ use crate::package::{PackageProvider, PackageResource, package_installed};
 use crate::service::{ServiceProvider, ServiceResource, service_current};
 use crate::state::{State, StateResource};
 use crate::symlink::{
-    SymlinkResource, resolve_symlink_target, same_path, state_symlink, symlink_id_for,
-    symlink_matches,
+    SymlinkResource, regular_file_matches, resolve_symlink_target, same_path, state_symlink,
+    symlink_id_for, symlink_matches,
 };
 use crate::user::{
     UserGroupResource, UserShellResource, current_shell, group_exists, shell_matches,
@@ -125,6 +125,9 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                         reason: "target exists but is not managed".to_string(),
                     });
                 }
+            }
+            Ok(meta) if meta.is_file() && regular_file_matches(resource)? => {
+                plan.push(PlanStep::SymlinkUpdate(resource.clone()));
             }
             Ok(_) => plan.push(PlanStep::SymlinkConflict {
                 resource: resource.clone(),
@@ -366,5 +369,23 @@ mod tests {
 
         assert!(state.resources.is_empty());
         assert!(matches!(plan.as_slice(), [PlanStep::PackageNoop(_)]));
+    }
+
+    #[test]
+    fn identical_regular_symlink_target_can_be_replaced() {
+        let root =
+            std::env::temp_dir().join(format!("dots-identical-target-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("target");
+        let source = root.join("source");
+        fs::write(&target, "same").unwrap();
+        fs::write(&source, "same").unwrap();
+
+        let mut config = Config::default();
+        config.symlinks.push(SymlinkResource { target, source });
+
+        let plan = build_plan(&config, &State::default()).unwrap();
+
+        assert!(matches!(plan.as_slice(), [PlanStep::SymlinkUpdate(_)]));
     }
 }
