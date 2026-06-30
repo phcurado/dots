@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 
+use crate::command::{CommandResource, command_apply};
 use crate::font::{FontResource, apply_font, refresh_font_cache, remove_font, state_font};
 use crate::output::{apply_with_status, bold, display_target, green, red, summarize_plan, yellow};
 use crate::package::{
@@ -133,6 +134,13 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .insert(font_id_for(resource), state_font(resource));
             }
+            PlanStep::CommandCreate(resource) => apply_with_status(
+                "Running",
+                "Run",
+                &format!("command.{}", resource.name),
+                || run_command(resource),
+            )?,
+            PlanStep::CommandNoop => {}
             PlanStep::UserShellUpdate { resource, .. } => apply_with_status(
                 "Updating",
                 "Update",
@@ -193,6 +201,10 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
         }
     }
     tracked
+}
+
+fn run_command(resource: &CommandResource) -> Result<()> {
+    command_apply(resource)
 }
 
 fn update_shell(resource: &UserShellResource) -> Result<()> {

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use mlua::{Lua, Table, Value};
 
+use crate::command::CommandResource;
 use crate::font::{FontResource, expand_font_source};
 use crate::package::{PackageProvider, PackageResource};
 use crate::plan::package_id_for;
@@ -24,6 +25,7 @@ pub(crate) struct Config {
     pub(crate) packages: Vec<PackageResource>,
     pub(crate) services: Vec<ServiceResource>,
     pub(crate) fonts: Vec<FontResource>,
+    pub(crate) commands: Vec<CommandResource>,
     pub(crate) package_providers: BTreeMap<String, PackageProvider>,
     pub(crate) service_providers: BTreeMap<String, ServiceProvider>,
     pub(crate) user: UserConfig,
@@ -37,6 +39,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let service_providers = lua.create_table()?;
     let services = lua.create_table()?;
     let font_sources = lua.create_table()?;
+    let commands = lua.create_table()?;
     let user_groups = lua.create_table()?;
     let user_shell = lua.create_table()?;
     let dots = lua.create_table()?;
@@ -84,6 +87,16 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     })?;
     fonts.set("install", fonts_install)?;
 
+    let collected_commands = commands.clone();
+    let command = lua.create_function(move |lua, (name, spec): (String, Table)| {
+        let item = lua.create_table()?;
+        item.set("name", name)?;
+        item.set("check", spec.get::<String>("check")?)?;
+        item.set("apply", spec.get::<String>("apply")?)?;
+        collected_commands.raw_push(item)?;
+        Ok(())
+    })?;
+
     let user = lua.create_table()?;
     let collected_user_shell = user_shell.clone();
     let shell = lua.create_function(move |_, shell: String| {
@@ -106,6 +119,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
 
     dots.set("symlink", symlink)?;
     dots.set("fonts", fonts)?;
+    dots.set("command", command)?;
     dots.set("user", user)?;
     dots.set("profile", profile)?;
     dots.set("platform", platform)?;
@@ -179,6 +193,14 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             .fonts
             .extend(expand_font_source(&project.root, Some(&source?))?);
     }
+    for item in commands.sequence_values::<Table>() {
+        let item = item?;
+        config.commands.push(CommandResource {
+            name: item.get::<String>("name")?,
+            check: item.get::<String>("check")?,
+            apply: item.get::<String>("apply")?,
+        });
+    }
     if let Some(shell) = user_shell.get::<Option<String>>("name")? {
         config.user.shell = Some(resolve_shell(&shell)?);
     }
@@ -250,6 +272,19 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     config
         .fonts
         .retain(|resource| font_ids.insert(crate::plan::font_id_for(resource)));
+
+    let mut command_names = BTreeMap::<String, CommandResource>::new();
+    for resource in config.commands.drain(..) {
+        match command_names.get(&resource.name) {
+            Some(existing)
+                if existing.check == resource.check && existing.apply == resource.apply => {}
+            Some(_) => bail!("duplicate command: {}", resource.name),
+            None => {
+                command_names.insert(resource.name.clone(), resource);
+            }
+        }
+    }
+    config.commands = command_names.into_values().collect();
 
     let mut group_names = BTreeSet::new();
     config

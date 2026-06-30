@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::command::{CommandResource, command_current};
 use crate::config::Config;
 use crate::font::{FontResource, font_matches};
 use crate::package::{
@@ -83,6 +84,8 @@ pub(crate) enum PlanStep {
         resource: UserGroupResource,
         reason: String,
     },
+    CommandCreate(CommandResource),
+    CommandNoop,
 }
 
 pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> Result<()> {
@@ -201,6 +204,14 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             plan.push(PlanStep::FontUpdate(resource.clone()));
         } else {
             plan.push(PlanStep::FontCreate(resource.clone()));
+        }
+    }
+
+    for resource in &config.commands {
+        if command_current(resource)? {
+            plan.push(PlanStep::CommandNoop);
+        } else {
+            plan.push(PlanStep::CommandCreate(resource.clone()));
         }
     }
 

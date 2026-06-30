@@ -111,27 +111,19 @@ fn init_reports_when_already_initialized() {
 }
 
 #[test]
-fn default_command_can_initialize_missing_config() {
+fn default_command_without_config_fails_without_prompt_when_not_interactive() {
     let root = temp_dir("cli-default-init");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_dots"))
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
         .current_dir(&root)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .unwrap();
 
-    child.stdin.as_mut().unwrap().write_all(b"yes\n").unwrap();
-
-    let output = child.wait_with_output().unwrap();
-
-    assert!(output.status.success());
-    assert!(root.join("dots.lua").exists());
-    assert!(root.join(".gitignore").exists());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Create a dots project in this folder?"));
-    assert!(stdout.contains("No changes."));
+    assert!(!output.status.success());
+    assert!(!root.join("dots.lua").exists());
 }
 
 #[test]

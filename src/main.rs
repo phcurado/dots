@@ -1,4 +1,5 @@
 mod apply;
+mod command;
 mod config;
 mod font;
 mod output;
@@ -23,7 +24,7 @@ use platform::selected_profile;
 use project::{Project, find_project};
 use state::{State, load_state, save_state};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use symlink::expand_home;
 
@@ -137,8 +138,11 @@ fn find_project_or_offer_init() -> Result<Project> {
 }
 
 fn confirm_init() -> Result<bool> {
-    println!("No dots project found here or in any parent directory.");
-    print!("Create a dots project in this folder? [y/N] ");
+    if !io::stdin().is_terminal() {
+        return Ok(false);
+    }
+
+    print!("Initialize dots in this folder? [y/N] ");
     io::stdout().flush()?;
 
     let mut answer = String::new();

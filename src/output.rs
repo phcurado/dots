@@ -52,7 +52,8 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::PackageCreate { .. }
             | PlanStep::ServiceCreate { .. }
             | PlanStep::FontCreate(_)
-            | PlanStep::UserGroupAdd(_) => summary.create += 1,
+            | PlanStep::UserGroupAdd(_)
+            | PlanStep::CommandCreate(_) => summary.create += 1,
             PlanStep::SymlinkUpdate(_)
             | PlanStep::FontUpdate(_)
             | PlanStep::UserShellUpdate { .. } => summary.update += 1,
@@ -70,7 +71,8 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::ServiceNoop(_)
             | PlanStep::FontNoop(_)
             | PlanStep::UserShellNoop
-            | PlanStep::UserGroupNoop => {}
+            | PlanStep::UserGroupNoop
+            | PlanStep::CommandNoop => {}
         }
     }
     summary
@@ -193,6 +195,21 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
+    let has_commands = plan
+        .iter()
+        .any(|step| matches!(step, PlanStep::CommandCreate(_)));
+    if has_commands {
+        if has_symlinks || has_packages || has_fonts {
+            println!();
+        }
+        println!("{}", bold("Commands:"));
+        for step in plan {
+            if let PlanStep::CommandCreate(resource) = step {
+                println!("  {} command {}", green("+"), resource.name);
+            }
+        }
+    }
+
     let has_services = plan.iter().any(|step| {
         matches!(
             step,
@@ -202,7 +219,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_services {
-        if has_symlinks || has_packages || has_fonts {
+        if has_symlinks || has_packages || has_fonts || has_commands {
             println!();
         }
         println!("{}", bold("Services:"));
@@ -243,7 +260,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_user {
-        if has_symlinks || has_packages || has_fonts || has_services {
+        if has_symlinks || has_packages || has_fonts || has_commands || has_services {
             println!();
         }
         println!("{}", bold("User:"));
