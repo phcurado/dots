@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs as unix_fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -226,7 +227,8 @@ fn collect_stale_symlinks(
                 continue;
             }
             let current = fs::read_link(&target)?;
-            let current = resolve_symlink_target(&target, &current);
+            let current = normalize_path(&resolve_symlink_target(&target, &current));
+            let source_root = normalize_path(source_root);
             if current.starts_with(source_root) {
                 resources.push(SymlinkResource {
                     target,
@@ -260,6 +262,58 @@ pub(crate) fn resolve_symlink_target(target: &Path, link: &Path) -> PathBuf {
     }
 }
 
+fn relative_path(from_dir: &Path, to: &Path) -> PathBuf {
+    let from_dir = normalize_path(from_dir);
+    let to = normalize_path(to);
+    if from_dir.is_absolute() != to.is_absolute() {
+        return to;
+    }
+
+    let from_components = path_components_without_root(&from_dir);
+    let to_components = path_components_without_root(&to);
+    let common = from_components
+        .iter()
+        .zip(&to_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+
+    let mut relative = PathBuf::new();
+    for _ in common..from_components.len() {
+        relative.push("..");
+    }
+    for component in &to_components[common..] {
+        relative.push(component);
+    }
+    if relative.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        relative
+    }
+}
+
+fn path_components_without_root(path: &Path) -> Vec<OsString> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(component) => Some(component.to_os_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 pub(crate) fn state_symlink(resource: &SymlinkResource) -> StateResource {
     StateResource::Symlink {
         target: resource.target.clone(),
@@ -278,7 +332,11 @@ pub(crate) fn apply_symlink(resource: &SymlinkResource, state: &mut State) -> Re
     if resource.target.exists() || fs::symlink_metadata(&resource.target).is_ok() {
         fs::remove_file(&resource.target)?;
     }
-    unix_fs::symlink(&resource.source, &resource.target).with_context(|| {
+    let link_target = relative_path(
+        resource.target.parent().unwrap_or_else(|| Path::new(".")),
+        &resource.source,
+    );
+    unix_fs::symlink(&link_target, &resource.target).with_context(|| {
         format!(
             "failed to symlink {} -> {}",
             resource.target.display(),
@@ -319,6 +377,27 @@ mod tests {
     fn missing_paths_are_not_the_same_path() {
         let base = std::env::temp_dir().join(format!("dots-missing-{}", std::process::id()));
         assert!(!same_path(&base.join("one"), &base.join("two")));
+    }
+
+    #[test]
+    fn apply_symlink_uses_relative_link_target() {
+        let root = std::env::temp_dir().join(format!("dots-relative-link-{}", std::process::id()));
+        let source = root.join("repo/.config/app/config.toml");
+        let target = root.join("home/.config/app/config.toml");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "config").unwrap();
+
+        let resource = SymlinkResource {
+            target: target.clone(),
+            source: source.clone(),
+        };
+        apply_symlink(&resource, &mut State::default()).unwrap();
+
+        assert_eq!(
+            fs::read_link(&target).unwrap(),
+            PathBuf::from("../../../repo/.config/app/config.toml")
+        );
+        assert!(symlink_matches(&resource).unwrap());
     }
 
     #[test]
@@ -387,6 +466,33 @@ mod tests {
             &SymlinkDeclaration {
                 target,
                 source: source.clone(),
+                ignore: Vec::new(),
+            },
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        assert!(resources.iter().any(|resource| resource.target == stale));
+    }
+
+    #[test]
+    fn stale_symlink_scan_handles_relative_links_with_parent_segments() {
+        let root = std::env::temp_dir().join(format!("dots-stale-relative-{}", std::process::id()));
+        let source = root.join("repo/.config");
+        let target = root.join("home/.config");
+        fs::create_dir_all(source.join("nvim")).unwrap();
+        fs::create_dir_all(target.join("nvim/removed-plugin")).unwrap();
+        let stale = target.join("nvim/removed-plugin/init.lua");
+        unix_fs::symlink(
+            "../../../../repo/.config/nvim/removed-plugin/init.lua",
+            &stale,
+        )
+        .unwrap();
+
+        let resources = stale_symlinks_for_declaration(
+            &SymlinkDeclaration {
+                target,
+                source,
                 ignore: Vec::new(),
             },
             &BTreeSet::new(),
