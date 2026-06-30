@@ -1,5 +1,11 @@
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::Result;
 use owo_colors::OwoColorize;
@@ -309,6 +315,33 @@ pub(crate) fn print_state_initialized(project: &Project, state_path: &Path) {
         dim(&display_source(project, state_path))
     );
     println!();
+}
+
+pub(crate) fn with_spinner<T>(message: &str, work: impl FnOnce() -> Result<T>) -> Result<T> {
+    if !std::io::stderr().is_terminal() {
+        return work();
+    }
+
+    let done = Arc::new(AtomicBool::new(false));
+    let done_for_thread = done.clone();
+    let message = message.to_string();
+    let spinner = thread::spawn(move || {
+        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let mut index = 0;
+        while !done_for_thread.load(Ordering::Relaxed) {
+            eprint!("\r{} {message}", dim(frames[index % frames.len()]));
+            let _ = std::io::stderr().flush();
+            index += 1;
+            thread::sleep(Duration::from_millis(100));
+        }
+        eprint!("\r\x1b[2K");
+        let _ = std::io::stderr().flush();
+    });
+
+    let result = work();
+    done.store(true, Ordering::Relaxed);
+    let _ = spinner.join();
+    result
 }
 
 pub(crate) fn apply_with_status(

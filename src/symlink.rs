@@ -104,6 +104,19 @@ fn expand_symlink_dir(
 
 fn build_ignore_set(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
+    for pattern in [
+        ".git",
+        ".git/**",
+        "**/.git",
+        "**/.git/**",
+        ".gitignore",
+        "**/.gitignore",
+        ".gitmodules",
+        "**/.gitmodules",
+    ] {
+        builder
+            .add(Glob::new(pattern).with_context(|| format!("invalid ignore pattern: {pattern}"))?);
+    }
     for pattern in patterns {
         builder
             .add(Glob::new(pattern).with_context(|| format!("invalid ignore pattern: {pattern}"))?);
@@ -225,5 +238,34 @@ mod tests {
     fn missing_paths_are_not_the_same_path() {
         let base = std::env::temp_dir().join(format!("dots-missing-{}", std::process::id()));
         assert!(!same_path(&base.join("one"), &base.join("two")));
+    }
+
+    #[test]
+    fn directory_expansion_ignores_git_metadata() {
+        let root = std::env::temp_dir().join(format!("dots-git-ignore-{}", std::process::id()));
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("plugin/.git")).unwrap();
+        fs::create_dir_all(target.join("plugin")).unwrap();
+        fs::write(source.join("plugin/.git/config"), "").unwrap();
+        fs::write(source.join("plugin/.gitignore"), "").unwrap();
+        fs::write(source.join("plugin/file"), "").unwrap();
+
+        let resources = expand_symlink_declaration(&SymlinkDeclaration {
+            target,
+            source: source.clone(),
+            ignore: Vec::new(),
+        })
+        .unwrap();
+
+        assert!(
+            resources
+                .iter()
+                .any(|resource| resource.source == source.join("plugin/file"))
+        );
+        assert!(resources.iter().all(|resource| {
+            let source = resource.source.display().to_string();
+            !source.contains(".git")
+        }));
     }
 }

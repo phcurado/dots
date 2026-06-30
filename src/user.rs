@@ -43,6 +43,13 @@ fn command_path(name: &str) -> Option<PathBuf> {
 
 pub(crate) fn current_shell() -> Option<PathBuf> {
     let user = current_user()?;
+    if std::env::consts::OS == "macos" {
+        return macos_current_shell(&user).or_else(env_shell);
+    }
+    passwd_shell(&user).or_else(env_shell)
+}
+
+fn passwd_shell(user: &str) -> Option<PathBuf> {
     let passwd = fs::read_to_string("/etc/passwd").ok()?;
     passwd.lines().find_map(|line| {
         let mut parts = line.split(':');
@@ -54,10 +61,35 @@ pub(crate) fn current_shell() -> Option<PathBuf> {
     })
 }
 
+fn macos_current_shell(user: &str) -> Option<PathBuf> {
+    let output = ProcessCommand::new("dscl")
+        .args([".", "-read", &format!("/Users/{user}"), "UserShell"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let output = String::from_utf8_lossy(&output.stdout);
+    output
+        .split_whitespace()
+        .last()
+        .filter(|shell| shell.starts_with('/'))
+        .map(PathBuf::from)
+}
+
+fn env_shell() -> Option<PathBuf> {
+    std::env::var_os("SHELL").map(PathBuf::from)
+}
+
 pub(crate) fn shell_matches(resource: &UserShellResource) -> bool {
     current_shell()
-        .map(|shell| shell == resource.path)
+        .map(|shell| shell == resource.path || shell_name_matches(&shell, &resource.name))
         .unwrap_or(false)
+}
+
+fn shell_name_matches(shell: &std::path::Path, requested: &str) -> bool {
+    !requested.contains('/') && shell.file_name().and_then(|name| name.to_str()) == Some(requested)
 }
 
 pub(crate) fn apply_shell(resource: &UserShellResource) -> Result<()> {

@@ -15,7 +15,9 @@ use anyhow::{Context, Result, bail};
 use apply::apply_plan;
 use clap::{Parser, Subcommand};
 use config::load_config;
-use output::{bold, print_plan, print_state, print_state_initialized, summarize_plan};
+use output::{
+    bold, print_plan, print_state, print_state_initialized, summarize_plan, with_spinner,
+};
 use plan::{build_plan, refresh_state_from_system};
 use platform::selected_profile;
 use project::{Project, find_project};
@@ -85,23 +87,27 @@ fn main() -> Result<()> {
 
     match command {
         Command::Check => {
-            let config = load_config(&project, &profile)?;
             if !state_exists {
                 print_state_initialized(&project, &state_path);
             }
-            refresh_state_from_system(&config, &mut state)?;
-            save_state(&state_path, &state)?;
-            let plan = build_plan(&config, &state)?;
+            let plan = with_spinner("Checking system...", || {
+                let config = load_config(&project, &profile)?;
+                refresh_state_from_system(&config, &mut state)?;
+                save_state(&state_path, &state)?;
+                build_plan(&config, &state)
+            })?;
             print_plan(&project, &plan);
         }
         Command::Apply => {
-            let config = load_config(&project, &profile)?;
             if !state_exists {
                 print_state_initialized(&project, &state_path);
             }
-            refresh_state_from_system(&config, &mut state)?;
-            save_state(&state_path, &state)?;
-            let plan = build_plan(&config, &state)?;
+            let plan = with_spinner("Checking system...", || {
+                let config = load_config(&project, &profile)?;
+                refresh_state_from_system(&config, &mut state)?;
+                save_state(&state_path, &state)?;
+                build_plan(&config, &state)
+            })?;
             print_plan(&project, &plan);
             confirm_apply(&plan)?;
             apply_plan(&plan, &mut state)?;
