@@ -83,16 +83,16 @@ Symlinks:
 ```
 
 If the existing file is different, or the target is a directory that cannot be
-expanded safely, the plan shows a conflict:
+expanded safely, the check shows a conflict:
 
 ```diff
 Symlinks:
   ! symlink ~/.zshrc (target exists and is not a symlink)
 ```
 
-To fix this, you can move or copy the file to the correct path, then run `dots plan` again.
+To fix this, you can move or copy the file to the correct path, then run `dots check` again.
 
-## Plan output
+## Check output
 
 A new link looks like this:
 
@@ -101,14 +101,14 @@ Symlinks:
   + symlink ~/.zshrc -> .zshrc
 ```
 
-If a managed link points somewhere else, the plan shows an update:
+If a managed link points somewhere else, the check shows an update:
 
 ```diff
 Symlinks:
   ~ symlink ~/.zshrc -> .zshrc
 ```
 
-If you remove a link from config, the plan shows a destroy:
+If you remove a link from config, the check shows a destroy:
 
 ```diff
 Symlinks:

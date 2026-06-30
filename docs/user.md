@@ -22,7 +22,7 @@ dots.user.shell("zsh")
 ```
 
 `dots` resolves the shell with `PATH`, so `"zsh"` becomes something like
-`/usr/bin/zsh`. If the current login shell already matches, the plan has no
+`/usr/bin/zsh`. If the current login shell already matches, the check has no
 change.
 
 On apply, `dots` runs:
@@ -41,7 +41,7 @@ Use `dots.user.groups(...)` for Linux groups:
 dots.user.groups({ "docker" })
 ```
 
-If the current user is not in the group, the plan shows an add. On apply,
+If the current user is not in the group, the check shows an add. On apply,
 `dots` runs:
 
 ```sh

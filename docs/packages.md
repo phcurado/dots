@@ -68,14 +68,14 @@ end
 
 ## State
 
-Packages are tracked after `apply`, not after `plan`.
+Packages are tracked after `apply`, not after `check`.
 
 For example, if `ripgrep` is already installed and you add it to `dots.lua`, the
-first plan still treats it as a declared resource that needs to be recorded. The
+first check still treats it as a declared resource that needs to be recorded. The
 apply step records it in state. This keeps one-off local installs from silently
 becoming part of the managed setup.
 
-## Plan output
+## Check output
 
 A missing package looks like this:
 
@@ -84,7 +84,7 @@ Packages:
   + paru ripgrep
 ```
 
-If a managed package is removed from config, the plan shows a destroy:
+If a managed package is removed from config, the check shows a destroy:
 
 ```diff
 Packages:
@@ -122,7 +122,7 @@ dots.brew.cask = dots["brew-cask"].install
 Provider commands run through `sh -c`. The package name is passed in the
 `DOTS_PACKAGE` environment variable.
 
-Provider availability is checked during `apply`, not during `plan`. That makes
+Provider availability is checked during `apply`, not during `check`. That makes
 bootstrap flows possible. For example, an Arch config can install `paru` with
 `pacman` and use `paru` later in the same apply.
 

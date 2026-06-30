@@ -66,14 +66,14 @@ end
 Pass a profile on the command line:
 
 ```sh
-dots --profile work plan
+dots --profile work check
 dots --profile work apply
 ```
 
 You can also set an environment variable:
 
 ```sh
-DOTS_PROFILE=work dots plan
+DOTS_PROFILE=work dots check
 ```
 
 If neither is set, `dots.profile` defaults to the hostname.

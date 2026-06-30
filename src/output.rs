@@ -262,7 +262,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep]) {
     println!();
     println!(
         "{} {} to create, {} to update, {} to destroy{}",
-        bold("Plan:"),
+        bold("Check:"),
         green(&summary.create.to_string()),
         yellow(&summary.update.to_string()),
         red(&summary.remove.to_string()),

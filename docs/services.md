@@ -34,7 +34,7 @@ Use `start` when the unit should be active now:
 dots.systemd.start({ "docker.service" })
 ```
 
-If you remove those declarations later, `dots` plans the reverse operation:
+If you remove those declarations later, `dots check` shows the reverse operation:
 
 - `enable` becomes `disable`
 - `start` becomes `stop`

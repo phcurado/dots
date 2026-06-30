@@ -59,7 +59,7 @@ On macOS, fonts are copied to:
 
 No extra cache command is needed.
 
-## Plan output
+## Check output
 
 A new font looks like this:
 
@@ -68,5 +68,5 @@ Fonts:
   + ~/.local/share/fonts/dots/0xProtoNerdFont-Regular.ttf
 ```
 
-If you remove a font from the repo, `dots plan` shows a destroy for the copied
+If you remove a font from the repo, `dots check` shows a destroy for the copied
 font file.
