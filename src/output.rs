@@ -109,8 +109,12 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
                     display_target(&resource.target),
                     display_source(project, &resource.source),
                 ),
-                PlanStep::SymlinkRemove { target, .. } => {
-                    println!("  {} symlink {}", red("-"), display_target(target))
+                PlanStep::SymlinkRemove { target, stale, .. } => {
+                    if *stale {
+                        println!("  {} stale symlink {}", red("-"), display_target(target))
+                    } else {
+                        println!("  {} symlink {}", red("-"), display_target(target))
+                    }
                 }
                 PlanStep::SymlinkConflict { resource, reason } => println!(
                     "  {} symlink {} ({reason})",
@@ -357,16 +361,31 @@ pub(crate) fn apply_with_status(
     id: &str,
     apply: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    println!("  {id}: {}...", dim(action));
+    let inline = std::io::stdout().is_terminal();
+    if inline {
+        print!("  {id}: {}...", dim(action));
+        std::io::stdout().flush()?;
+    } else {
+        println!("  {id}: {}...", dim(action));
+    }
+
     match apply() {
         Ok(()) => {
-            println!("  {id}: {}", green(&format!("{noun} complete")));
+            print_apply_status(inline, id, &green(&format!("{noun} complete")));
             Ok(())
         }
         Err(error) => {
-            println!("  {id}: {}", red(&format!("{noun} failed")));
+            print_apply_status(inline, id, &red(&format!("{noun} failed")));
             Err(error)
         }
+    }
+}
+
+fn print_apply_status(inline: bool, id: &str, status: &str) {
+    if inline {
+        println!("\r\x1b[2K  {id}: {status}");
+    } else {
+        println!("  {id}: {status}");
     }
 }
 

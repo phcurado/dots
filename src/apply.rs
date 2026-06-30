@@ -39,7 +39,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
         match step {
             PlanStep::SymlinkCreate(resource) => apply_with_status(
                 "Creating",
-                "Creation",
+                "Create",
                 &format!("symlink.{}", display_target(&resource.target)),
                 || apply_symlink(resource, state),
             )?,
@@ -49,7 +49,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                 &format!("symlink.{}", display_target(&resource.target)),
                 || apply_symlink(resource, state),
             )?,
-            PlanStep::SymlinkRemove { target, source } => {
+            PlanStep::SymlinkRemove { target, source, .. } => {
                 let resource = StateResource::Symlink {
                     target: target.clone(),
                     source: source.clone(),

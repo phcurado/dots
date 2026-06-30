@@ -359,7 +359,7 @@ pub(crate) fn remove_symlink(resource: &StateResource, state: &mut State) -> Res
     {
         let current = fs::read_link(target)?;
         let current = resolve_symlink_target(target, &current);
-        if same_path(&current, source) {
+        if same_path(&current, source) || normalize_path(&current) == normalize_path(source) {
             fs::remove_file(target)?;
         }
     }
@@ -398,6 +398,27 @@ mod tests {
             PathBuf::from("../../../repo/.config/app/config.toml")
         );
         assert!(symlink_matches(&resource).unwrap());
+    }
+
+    #[test]
+    fn remove_symlink_removes_link_to_missing_source() {
+        let root = std::env::temp_dir().join(format!("dots-remove-missing-{}", std::process::id()));
+        let source = root.join("repo/removed");
+        let target = root.join("home/removed");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        unix_fs::symlink(&source, &target).unwrap();
+
+        let mut state = State::default();
+        remove_symlink(
+            &StateResource::Symlink {
+                target: target.clone(),
+                source,
+            },
+            &mut state,
+        )
+        .unwrap();
+
+        assert!(fs::symlink_metadata(&target).is_err());
     }
 
     #[test]

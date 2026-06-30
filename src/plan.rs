@@ -28,6 +28,7 @@ pub(crate) enum PlanStep {
     SymlinkRemove {
         target: PathBuf,
         source: PathBuf,
+        stale: bool,
     },
     SymlinkNoop(SymlinkResource),
     SymlinkConflict {
@@ -153,6 +154,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                 plan.push(PlanStep::SymlinkRemove {
                     target: resource.target,
                     source: resource.source,
+                    stale: true,
                 });
             }
         }
@@ -260,6 +262,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                     plan.push(PlanStep::SymlinkRemove {
                         target: target.clone(),
                         source: source.clone(),
+                        stale: false,
                     });
                 }
             }
