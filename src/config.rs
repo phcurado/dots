@@ -274,17 +274,19 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
         .retain(|resource| font_ids.insert(crate::plan::font_id_for(resource)));
 
     let mut command_names = BTreeMap::<String, CommandResource>::new();
+    let mut commands = Vec::new();
     for resource in config.commands.drain(..) {
         match command_names.get(&resource.name) {
             Some(existing)
                 if existing.check == resource.check && existing.apply == resource.apply => {}
             Some(_) => bail!("duplicate command: {}", resource.name),
             None => {
-                command_names.insert(resource.name.clone(), resource);
+                command_names.insert(resource.name.clone(), resource.clone());
+                commands.push(resource);
             }
         }
     }
-    config.commands = command_names.into_values().collect();
+    config.commands = commands;
 
     let mut group_names = BTreeSet::new();
     config
@@ -738,6 +740,22 @@ mod tests {
         assert_eq!(shell.name, "sh");
         assert_eq!(config.user.groups.len(), 1);
         assert_eq!(config.user.groups[0].name, "docker");
+    }
+
+    #[test]
+    fn loads_commands_in_order() {
+        let project = temp_project(
+            r#"
+            dots.command("mise", { check = "exit 1", apply = "exit 0" })
+            dots.command("pi", { check = "exit 1", apply = "exit 0" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.commands.len(), 2);
+        assert_eq!(config.commands[0].name, "mise");
+        assert_eq!(config.commands[1].name, "pi");
     }
 
     #[test]

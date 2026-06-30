@@ -205,7 +205,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         println!("{}", bold("Commands:"));
         for step in plan {
             if let PlanStep::CommandCreate(resource) = step {
-                println!("  {} command {}", green("+"), resource.name);
+                println!("  {} {}", green("+"), resource.name);
             }
         }
     }
