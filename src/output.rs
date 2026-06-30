@@ -72,7 +72,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::FontNoop(_)
             | PlanStep::UserShellNoop
             | PlanStep::UserGroupNoop
-            | PlanStep::CommandNoop => {}
+            | PlanStep::CommandNoop(_) => {}
         }
     }
     summary

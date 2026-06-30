@@ -93,6 +93,12 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         item.set("name", name)?;
         item.set("check", spec.get::<String>("check")?)?;
         item.set("apply", spec.get::<String>("apply")?)?;
+        if let Some(needs) = spec.get::<Option<Table>>("needs")? {
+            item.set("needs", needs)?;
+        }
+        if let Some(provides) = spec.get::<Option<Table>>("provides")? {
+            item.set("provides", provides)?;
+        }
         collected_commands.raw_push(item)?;
         Ok(())
     })?;
@@ -199,6 +205,8 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             name: item.get::<String>("name")?,
             check: item.get::<String>("check")?,
             apply: item.get::<String>("apply")?,
+            needs: table_strings(item.get::<Option<Table>>("needs")?)?,
+            provides: table_strings(item.get::<Option<Table>>("provides")?)?,
         });
     }
     if let Some(shell) = user_shell.get::<Option<String>>("name")? {
@@ -278,7 +286,10 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     for resource in config.commands.drain(..) {
         match command_names.get(&resource.name) {
             Some(existing)
-                if existing.check == resource.check && existing.apply == resource.apply => {}
+                if existing.check == resource.check
+                    && existing.apply == resource.apply
+                    && existing.needs == resource.needs
+                    && existing.provides == resource.provides => {}
             Some(_) => bail!("duplicate command: {}", resource.name),
             None => {
                 command_names.insert(resource.name.clone(), resource.clone());

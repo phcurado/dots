@@ -22,3 +22,11 @@ dots.provider.package("brew-tap", {
 })
 
 dots.brew.tap = dots["brew-tap"].install
+
+dots.brew.enable = function()
+	dots.command("homebrew", {
+		check = "command -v brew >/dev/null",
+		apply = [[/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"]],
+		provides = { "provider:brew", "provider:brew-cask", "provider:brew-tap", "provider:brew-service" },
+	})
+end

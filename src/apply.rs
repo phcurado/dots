@@ -1,6 +1,8 @@
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
 use anyhow::{Result, bail};
 
-use crate::command::{CommandResource, command_apply};
+use crate::command::{CommandResource, command_apply, command_id_for};
 use crate::font::{FontResource, apply_font, refresh_font_cache, remove_font, state_font};
 use crate::output::{apply_with_status, bold, display_target, green, red, summarize_plan, yellow};
 use crate::package::{
@@ -36,8 +38,8 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
     println!();
     println!("{}", bold("Applying:"));
 
-    for step in plan {
-        match step {
+    for index in apply_order(plan)? {
+        match &plan[index] {
             PlanStep::SymlinkCreate(resource) => apply_with_status(
                 "Creating",
                 "Create",
@@ -140,7 +142,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                 &format!("command.{}", resource.name),
                 || run_command(resource),
             )?,
-            PlanStep::CommandNoop => {}
+            PlanStep::CommandNoop(_) => {}
             PlanStep::UserShellUpdate { resource, .. } => apply_with_status(
                 "Updating",
                 "Update",
@@ -172,6 +174,185 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn apply_order(plan: &[PlanStep]) -> Result<Vec<usize>> {
+    let action_indices = plan
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| is_apply_step(step).then_some(index))
+        .collect::<Vec<_>>();
+
+    let mut provider = BTreeMap::<String, usize>::new();
+    let mut satisfied = BTreeSet::<String>::new();
+    for (index, step) in plan.iter().enumerate() {
+        if let Some(id) = step_id(step) {
+            if action_indices.contains(&index) {
+                provider.entry(id).or_insert(index);
+            } else {
+                satisfied.insert(id);
+            }
+        }
+
+        let provides = step_provides(step);
+        if action_indices.contains(&index) {
+            for capability in provides {
+                provider.insert(capability, index);
+            }
+        } else {
+            satisfied.extend(provides);
+        }
+    }
+
+    let action_set = action_indices.iter().copied().collect::<BTreeSet<_>>();
+    let mut edges = BTreeMap::<usize, BTreeSet<usize>>::new();
+    let mut indegree = BTreeMap::<usize, usize>::new();
+    for &index in &action_indices {
+        indegree.insert(index, 0);
+    }
+
+    for &index in &action_indices {
+        for dependency in step_needs(&plan[index]) {
+            if satisfied.contains(&dependency) {
+                continue;
+            }
+            let Some(&dependency_index) = provider.get(&dependency) else {
+                continue;
+            };
+            if dependency_index == index || !action_set.contains(&dependency_index) {
+                continue;
+            }
+            if edges.entry(dependency_index).or_default().insert(index) {
+                *indegree.entry(index).or_default() += 1;
+            }
+        }
+    }
+
+    let original_position = action_indices
+        .iter()
+        .enumerate()
+        .map(|(position, index)| (*index, position))
+        .collect::<BTreeMap<_, _>>();
+    let mut ready = action_indices
+        .iter()
+        .copied()
+        .filter(|index| indegree.get(index).copied().unwrap_or_default() == 0)
+        .collect::<Vec<_>>();
+    ready.sort_by_key(|index| original_position[index]);
+    let mut ready = VecDeque::from(ready);
+    let mut ordered = Vec::new();
+
+    while let Some(index) = ready.pop_front() {
+        ordered.push(index);
+        if let Some(children) = edges.get(&index) {
+            for &child in children {
+                let count = indegree
+                    .get_mut(&child)
+                    .expect("child should have indegree");
+                *count -= 1;
+                if *count == 0 {
+                    let position = ready
+                        .iter()
+                        .position(|queued| original_position[&child] < original_position[queued])
+                        .unwrap_or(ready.len());
+                    ready.insert(position, child);
+                }
+            }
+        }
+    }
+
+    if ordered.len() != action_indices.len() {
+        bail!("resource dependency cycle detected");
+    }
+
+    Ok(ordered)
+}
+
+fn is_apply_step(step: &PlanStep) -> bool {
+    matches!(
+        step,
+        PlanStep::SymlinkCreate(_)
+            | PlanStep::SymlinkUpdate(_)
+            | PlanStep::SymlinkRemove { .. }
+            | PlanStep::PackageCreate { .. }
+            | PlanStep::PackageRemove { .. }
+            | PlanStep::ServiceCreate { .. }
+            | PlanStep::ServiceRemove { .. }
+            | PlanStep::FontCreate(_)
+            | PlanStep::FontUpdate(_)
+            | PlanStep::FontRemove { .. }
+            | PlanStep::UserShellUpdate { .. }
+            | PlanStep::UserGroupAdd(_)
+            | PlanStep::CommandCreate(_)
+    )
+}
+
+fn step_id(step: &PlanStep) -> Option<String> {
+    match step {
+        PlanStep::CommandCreate(resource) | PlanStep::CommandNoop(resource) => {
+            Some(command_id_for(resource))
+        }
+        PlanStep::PackageCreate { resource, .. } | PlanStep::PackageRemove { resource, .. } => {
+            Some(package_id_for(resource))
+        }
+        PlanStep::ServiceCreate { resource, .. } | PlanStep::ServiceRemove { resource, .. } => {
+            Some(service_id_for(resource))
+        }
+        PlanStep::FontCreate(resource) | PlanStep::FontUpdate(resource) => {
+            Some(font_id_for(resource))
+        }
+        PlanStep::FontRemove { target, .. } => Some(format!("font:{}", target.display())),
+        PlanStep::SymlinkCreate(resource) | PlanStep::SymlinkUpdate(resource) => {
+            Some(symlink_id_for(resource))
+        }
+        PlanStep::SymlinkRemove { target, .. } => Some(format!("symlink:{}", target.display())),
+        PlanStep::UserShellUpdate { resource, .. } => Some(format!("user-shell:{}", resource.name)),
+        PlanStep::UserGroupAdd(resource) => Some(format!("user-group:{}", resource.name)),
+        _ => None,
+    }
+}
+
+fn step_provides(step: &PlanStep) -> Vec<String> {
+    match step {
+        PlanStep::CommandCreate(resource) | PlanStep::CommandNoop(resource) => {
+            resource.provides.clone()
+        }
+        PlanStep::PackageCreate { resource, .. } | PlanStep::PackageNoop(resource) => {
+            package_provides(resource)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn package_provides(resource: &PackageResource) -> Vec<String> {
+    match (resource.provider.as_str(), resource.name.as_str()) {
+        ("pacman", "paru") => vec!["provider:paru".to_string()],
+        _ => Vec::new(),
+    }
+}
+
+fn step_needs(step: &PlanStep) -> Vec<String> {
+    match step {
+        PlanStep::CommandCreate(resource) => resource.needs.clone(),
+        PlanStep::PackageCreate { resource, .. } | PlanStep::PackageRemove { resource, .. } => {
+            provider_needs(&resource.provider)
+        }
+        PlanStep::ServiceCreate { resource, .. } | PlanStep::ServiceRemove { resource, .. } => {
+            provider_needs(&resource.provider)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn provider_needs(provider: &str) -> Vec<String> {
+    match provider {
+        "brew" | "brew-cask" | "brew-tap" | "brew-service" => vec!["provider:brew".to_string()],
+        "paru" => vec!["provider:paru".to_string()],
+        "pacman" => vec!["provider:pacman".to_string()],
+        "apt" => vec!["provider:apt".to_string()],
+        "systemd" => vec!["provider:systemd".to_string()],
+        provider => vec![format!("provider:{provider}")],
+    }
 }
 
 fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
@@ -279,4 +460,87 @@ fn remove_package(
     }
     state.resources.remove(&package_id_for(resource));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider() -> PackageProvider {
+        PackageProvider {
+            available: "exit 0".to_string(),
+            installed: "exit 1".to_string(),
+            install: "exit 0".to_string(),
+            remove: "exit 0".to_string(),
+        }
+    }
+
+    #[test]
+    fn apply_order_uses_command_provided_capabilities() {
+        let package = PlanStep::PackageCreate {
+            resource: PackageResource {
+                provider: "brew".to_string(),
+                name: "bat".to_string(),
+            },
+            provider: provider(),
+        };
+        let command = PlanStep::CommandCreate(CommandResource {
+            name: "homebrew".to_string(),
+            check: "exit 1".to_string(),
+            apply: "exit 0".to_string(),
+            needs: Vec::new(),
+            provides: vec!["provider:brew".to_string()],
+        });
+        let plan = vec![package, command];
+
+        let order = apply_order(&plan).unwrap();
+
+        assert_eq!(order, vec![1, 0]);
+    }
+
+    #[test]
+    fn apply_order_uses_package_provided_capabilities() {
+        let paru_package = PlanStep::PackageCreate {
+            resource: PackageResource {
+                provider: "paru".to_string(),
+                name: "bat".to_string(),
+            },
+            provider: provider(),
+        };
+        let pacman_paru = PlanStep::PackageCreate {
+            resource: PackageResource {
+                provider: "pacman".to_string(),
+                name: "paru".to_string(),
+            },
+            provider: provider(),
+        };
+        let plan = vec![paru_package, pacman_paru];
+
+        let order = apply_order(&plan).unwrap();
+
+        assert_eq!(order, vec![1, 0]);
+    }
+
+    #[test]
+    fn apply_order_uses_explicit_command_needs() {
+        let pi = PlanStep::CommandCreate(CommandResource {
+            name: "pi".to_string(),
+            check: "exit 1".to_string(),
+            apply: "exit 0".to_string(),
+            needs: vec!["command:mise tools".to_string()],
+            provides: Vec::new(),
+        });
+        let mise = PlanStep::CommandCreate(CommandResource {
+            name: "mise tools".to_string(),
+            check: "exit 1".to_string(),
+            apply: "exit 0".to_string(),
+            needs: Vec::new(),
+            provides: Vec::new(),
+        });
+        let plan = vec![pi, mise];
+
+        let order = apply_order(&plan).unwrap();
+
+        assert_eq!(order, vec![1, 0]);
+    }
 }

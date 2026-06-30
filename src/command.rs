@@ -7,6 +7,12 @@ pub(crate) struct CommandResource {
     pub(crate) name: String,
     pub(crate) check: String,
     pub(crate) apply: String,
+    pub(crate) needs: Vec<String>,
+    pub(crate) provides: Vec<String>,
+}
+
+pub(crate) fn command_id_for(resource: &CommandResource) -> String {
+    format!("command:{}", resource.name)
 }
 
 pub(crate) fn command_current(resource: &CommandResource) -> Result<bool> {
@@ -28,9 +34,12 @@ pub(crate) fn command_apply(resource: &CommandResource) -> Result<()> {
 
 fn run_shell(command: &str, quiet: bool) -> Result<bool> {
     let mut process = ProcessCommand::new("sh");
-    process.arg("-c").arg(command).stdin(Stdio::null());
+    process.arg("-c").arg(command);
     if quiet {
-        process.stdout(Stdio::null()).stderr(Stdio::null());
+        process
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
     }
     Ok(process.status()?.success())
 }

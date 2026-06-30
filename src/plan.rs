@@ -85,7 +85,7 @@ pub(crate) enum PlanStep {
         reason: String,
     },
     CommandCreate(CommandResource),
-    CommandNoop,
+    CommandNoop(CommandResource),
 }
 
 pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> Result<()> {
@@ -207,13 +207,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
-    for resource in &config.commands {
-        if command_current(resource)? {
-            plan.push(PlanStep::CommandNoop);
-        } else {
-            plan.push(PlanStep::CommandCreate(resource.clone()));
-        }
-    }
+    plan_commands(&config.commands, &mut plan)?;
 
     let mut service_status = ServiceStatusCache::default();
     for resource in &config.services {
@@ -327,6 +321,17 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
     }
 
     Ok(plan)
+}
+
+fn plan_commands(commands: &[CommandResource], plan: &mut Vec<PlanStep>) -> Result<()> {
+    for resource in commands {
+        if command_current(resource)? {
+            plan.push(PlanStep::CommandNoop(resource.clone()));
+        } else {
+            plan.push(PlanStep::CommandCreate(resource.clone()));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn state_package(resource: &PackageResource) -> StateResource {
