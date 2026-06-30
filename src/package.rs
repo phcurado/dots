@@ -165,9 +165,15 @@ fn command_set(command: &str) -> Result<Option<BTreeSet<String>>> {
 }
 
 fn package_set_contains(packages: &BTreeSet<String>, provider: &str, name: &str) -> bool {
-    packages.contains(name)
-        || matches!(provider, "brew" | "brew-cask")
-            && packages.contains(name.rsplit('/').next().unwrap_or(name))
+    match provider {
+        "brew" | "brew-cask" => {
+            packages.contains(name) || packages.contains(name.rsplit('/').next().unwrap_or(name))
+        }
+        "brew-tap" => packages
+            .iter()
+            .any(|package| package.eq_ignore_ascii_case(name)),
+        _ => packages.contains(name),
+    }
 }
 
 pub(crate) fn run_provider_command(
@@ -219,5 +225,16 @@ mod tests {
         assert!(formulae.contains("7zip"));
         assert!(casks.contains("aerospace"));
         assert!(casks.contains("nikitabobko/tap/aerospace"));
+    }
+
+    #[test]
+    fn brew_taps_match_case_insensitively() {
+        let packages = BTreeSet::from(["felixkratz/formulae".to_string()]);
+
+        assert!(package_set_contains(
+            &packages,
+            "brew-tap",
+            "FelixKratz/formulae"
+        ));
     }
 }

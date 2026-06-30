@@ -14,8 +14,8 @@ use crate::service::{
 };
 use crate::state::{State, StateResource};
 use crate::symlink::{
-    SymlinkResource, regular_file_matches, resolve_symlink_target, same_path, state_symlink,
-    symlink_id_for, symlink_matches,
+    SymlinkResource, regular_file_matches, resolve_symlink_target, same_path,
+    stale_symlinks_for_declaration, state_symlink, symlink_id_for, symlink_matches,
 };
 use crate::user::{
     UserGroupResource, UserShellResource, current_shell, group_exists, shell_matches,
@@ -99,10 +99,13 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
 pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
     let mut plan = Vec::new();
     let mut declared = BTreeSet::new();
+    let mut declared_symlink_targets = BTreeSet::new();
+    let mut planned_symlink_removals = BTreeSet::new();
 
     for resource in &config.symlinks {
         let id = symlink_id_for(resource);
         declared.insert(id.clone());
+        declared_symlink_targets.insert(resource.target.clone());
         let owned = state.resources.contains_key(&id);
 
         if !resource.source.exists() {
@@ -141,6 +144,17 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                 plan.push(PlanStep::SymlinkCreate(resource.clone()));
             }
             Err(error) => return Err(error.into()),
+        }
+    }
+
+    for declaration in &config.symlink_declarations {
+        for resource in stale_symlinks_for_declaration(declaration, &declared_symlink_targets)? {
+            if planned_symlink_removals.insert(resource.target.clone()) {
+                plan.push(PlanStep::SymlinkRemove {
+                    target: resource.target,
+                    source: resource.source,
+                });
+            }
         }
     }
 
@@ -241,10 +255,14 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             continue;
         }
         match resource {
-            StateResource::Symlink { target, source } => plan.push(PlanStep::SymlinkRemove {
-                target: target.clone(),
-                source: source.clone(),
-            }),
+            StateResource::Symlink { target, source } => {
+                if planned_symlink_removals.insert(target.clone()) {
+                    plan.push(PlanStep::SymlinkRemove {
+                        target: target.clone(),
+                        source: source.clone(),
+                    });
+                }
+            }
             StateResource::Font { source, target } => plan.push(PlanStep::FontRemove {
                 source: source.clone(),
                 target: target.clone(),
@@ -393,5 +411,36 @@ mod tests {
         let plan = build_plan(&config, &State::default()).unwrap();
 
         assert!(matches!(plan.as_slice(), [PlanStep::SymlinkUpdate(_)]));
+    }
+
+    #[test]
+    fn untracked_stale_symlinks_under_managed_directory_are_removed() {
+        let root = std::env::temp_dir().join(format!("dots-stale-link-{}", std::process::id()));
+        let source_root = root.join("source");
+        let target_root = root.join("target");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&target_root).unwrap();
+        fs::write(source_root.join("current"), "current").unwrap();
+        std::os::unix::fs::symlink(source_root.join("old"), target_root.join("old")).unwrap();
+
+        let mut config = Config::default();
+        config
+            .symlink_declarations
+            .push(crate::symlink::SymlinkDeclaration {
+                target: target_root.clone(),
+                source: source_root.clone(),
+                ignore: Vec::new(),
+            });
+        config.symlinks.push(SymlinkResource {
+            target: target_root.join("current"),
+            source: source_root.join("current"),
+        });
+
+        let plan = build_plan(&config, &State::default()).unwrap();
+
+        assert!(matches!(
+            plan.iter().find(|step| matches!(step, PlanStep::SymlinkRemove { .. })),
+            Some(PlanStep::SymlinkRemove { target, .. }) if target == &target_root.join("old")
+        ));
     }
 }

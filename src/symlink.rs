@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
@@ -171,6 +172,77 @@ pub(crate) fn regular_file_matches(resource: &SymlinkResource) -> Result<bool> {
     Ok(fs::read(&resource.target)? == fs::read(&resource.source)?)
 }
 
+pub(crate) fn stale_symlinks_for_declaration(
+    declaration: &SymlinkDeclaration,
+    declared_targets: &BTreeSet<PathBuf>,
+) -> Result<Vec<SymlinkResource>> {
+    let ignore = build_ignore_set(&declaration.ignore)?;
+    let mut resources = Vec::new();
+    collect_stale_symlinks(
+        &declaration.target,
+        &declaration.source,
+        Path::new(""),
+        &ignore,
+        declared_targets,
+        &mut resources,
+    )?;
+    Ok(resources)
+}
+
+fn collect_stale_symlinks(
+    target_root: &Path,
+    source_root: &Path,
+    relative: &Path,
+    ignore: &GlobSet,
+    declared_targets: &BTreeSet<PathBuf>,
+    resources: &mut Vec<SymlinkResource>,
+) -> Result<()> {
+    let source_dir = source_root.join(relative);
+    if !source_dir.is_dir() {
+        return Ok(());
+    }
+
+    let target_dir = target_root.join(relative);
+    let Ok(entries) = fs::read_dir(&target_dir) else {
+        return Ok(());
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let relative = relative.join(entry.file_name());
+        if ignore.is_match(&relative) {
+            continue;
+        }
+
+        let target = target_root.join(&relative);
+        let metadata = fs::symlink_metadata(&target)?;
+        if metadata.file_type().is_symlink() {
+            if declared_targets.contains(&target) {
+                continue;
+            }
+            let current = fs::read_link(&target)?;
+            let current = resolve_symlink_target(&target, &current);
+            if current.starts_with(source_root) {
+                resources.push(SymlinkResource {
+                    target,
+                    source: current,
+                });
+            }
+        } else if metadata.is_dir() && source_root.join(&relative).is_dir() {
+            collect_stale_symlinks(
+                target_root,
+                source_root,
+                &relative,
+                ignore,
+                declared_targets,
+                resources,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn resolve_symlink_target(target: &Path, link: &Path) -> PathBuf {
     if link.is_absolute() {
         link.to_path_buf()
@@ -267,5 +339,28 @@ mod tests {
             let source = resource.source.display().to_string();
             !source.contains(".git")
         }));
+    }
+
+    #[test]
+    fn stale_symlink_scan_skips_target_dirs_missing_from_source() {
+        let root = std::env::temp_dir().join(format!("dots-stale-skip-{}", std::process::id()));
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(target.join("large/unrelated/tree")).unwrap();
+        let stale = target.join("large/unrelated/tree/stale");
+        unix_fs::symlink(source.join("old"), &stale).unwrap();
+
+        let resources = stale_symlinks_for_declaration(
+            &SymlinkDeclaration {
+                target,
+                source,
+                ignore: Vec::new(),
+            },
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        assert!(resources.is_empty());
     }
 }

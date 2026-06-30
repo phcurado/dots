@@ -20,6 +20,7 @@ use crate::user::{UserConfig, UserGroupResource, resolve_shell};
 #[derive(Debug, Default)]
 pub(crate) struct Config {
     pub(crate) symlinks: Vec<SymlinkResource>,
+    pub(crate) symlink_declarations: Vec<SymlinkDeclaration>,
     pub(crate) packages: Vec<PackageResource>,
     pub(crate) services: Vec<ServiceResource>,
     pub(crate) fonts: Vec<FontResource>,
@@ -146,6 +147,9 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             source: PathBuf::from(item.get::<String>("source")?),
             ignore: table_strings(item.get::<Option<Table>>("ignore")?)?,
         };
+        if declaration.source.is_dir() {
+            config.symlink_declarations.push(declaration.clone());
+        }
         config
             .symlinks
             .extend(expand_symlink_declaration(&declaration)?);
