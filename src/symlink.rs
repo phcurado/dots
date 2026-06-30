@@ -182,6 +182,7 @@ pub(crate) fn stale_symlinks_for_declaration(
         &declaration.target,
         &declaration.source,
         Path::new(""),
+        false,
         &ignore,
         declared_targets,
         &mut resources,
@@ -193,14 +194,18 @@ fn collect_stale_symlinks(
     target_root: &Path,
     source_root: &Path,
     relative: &Path,
+    inside_managed_tree: bool,
     ignore: &GlobSet,
     declared_targets: &BTreeSet<PathBuf>,
     resources: &mut Vec<SymlinkResource>,
 ) -> Result<()> {
     let source_dir = source_root.join(relative);
-    if !source_dir.is_dir() {
+    let source_dir_exists = source_dir.is_dir();
+    if !source_dir_exists && !inside_managed_tree {
         return Ok(());
     }
+    let current_is_root = relative.as_os_str().is_empty();
+    let inside_managed_tree = inside_managed_tree || (!current_is_root && source_dir_exists);
 
     let target_dir = target_root.join(relative);
     let Ok(entries) = fs::read_dir(&target_dir) else {
@@ -228,15 +233,19 @@ fn collect_stale_symlinks(
                     source: current,
                 });
             }
-        } else if metadata.is_dir() && source_root.join(&relative).is_dir() {
-            collect_stale_symlinks(
-                target_root,
-                source_root,
-                &relative,
-                ignore,
-                declared_targets,
-                resources,
-            )?;
+        } else if metadata.is_dir() {
+            let child_source_exists = source_root.join(&relative).is_dir();
+            if inside_managed_tree || child_source_exists {
+                collect_stale_symlinks(
+                    target_root,
+                    source_root,
+                    &relative,
+                    inside_managed_tree,
+                    ignore,
+                    declared_targets,
+                    resources,
+                )?;
+            }
         }
     }
 
@@ -342,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_symlink_scan_skips_target_dirs_missing_from_source() {
+    fn stale_symlink_scan_skips_top_level_target_dirs_missing_from_source() {
         let root = std::env::temp_dir().join(format!("dots-stale-skip-{}", std::process::id()));
         let source = root.join("source");
         let target = root.join("target");
@@ -362,5 +371,28 @@ mod tests {
         .unwrap();
 
         assert!(resources.is_empty());
+    }
+
+    #[test]
+    fn stale_symlink_scan_keeps_scanning_inside_managed_dirs() {
+        let root = std::env::temp_dir().join(format!("dots-stale-inside-{}", std::process::id()));
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("nvim")).unwrap();
+        fs::create_dir_all(target.join("nvim/removed-plugin")).unwrap();
+        let stale = target.join("nvim/removed-plugin/init.lua");
+        unix_fs::symlink(source.join("nvim/removed-plugin/init.lua"), &stale).unwrap();
+
+        let resources = stale_symlinks_for_declaration(
+            &SymlinkDeclaration {
+                target,
+                source: source.clone(),
+                ignore: Vec::new(),
+            },
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        assert!(resources.iter().any(|resource| resource.target == stale));
     }
 }
