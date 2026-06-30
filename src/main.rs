@@ -96,7 +96,7 @@ fn main() -> Result<()> {
                 save_state(&state_path, &state)?;
                 build_plan(&config, &state)
             })?;
-            print_plan(&project, &plan);
+            print_plan(&project, &plan, true);
         }
         Command::Apply => {
             if !state_exists {
@@ -108,7 +108,7 @@ fn main() -> Result<()> {
                 save_state(&state_path, &state)?;
                 build_plan(&config, &state)
             })?;
-            print_plan(&project, &plan);
+            print_plan(&project, &plan, false);
             confirm_apply(&plan)?;
             apply_plan(&plan, &mut state)?;
             save_state(&state_path, &state)?;

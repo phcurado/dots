@@ -106,7 +106,11 @@ fn list_systemd_services() -> Result<Option<ServiceStatus>> {
         return Ok(None);
     };
 
-    let started = started
+    Ok(Some(parse_systemd_services(&started, &unit_files)))
+}
+
+fn parse_systemd_services(running_units: &[String], unit_files: &[String]) -> ServiceStatus {
+    let started = running_units
         .iter()
         .filter_map(|line| line.split_whitespace().next())
         .map(str::to_string)
@@ -125,13 +129,17 @@ fn list_systemd_services() -> Result<Option<ServiceStatus>> {
         })
         .collect();
 
-    Ok(Some(ServiceStatus { started, enabled }))
+    ServiceStatus { started, enabled }
 }
 
 fn list_brew_services() -> Result<Option<ServiceStatus>> {
     let Some(lines) = command_lines("brew services list")? else {
         return Ok(None);
     };
+    Ok(Some(parse_brew_services(&lines)))
+}
+
+fn parse_brew_services(lines: &[String]) -> ServiceStatus {
     let started = lines
         .iter()
         .skip(1)
@@ -143,10 +151,10 @@ fn list_brew_services() -> Result<Option<ServiceStatus>> {
         })
         .collect();
 
-    Ok(Some(ServiceStatus {
+    ServiceStatus {
         started,
         enabled: BTreeSet::new(),
-    }))
+    }
 }
 
 fn command_lines(command: &str) -> Result<Option<Vec<String>>> {
@@ -220,4 +228,55 @@ fn unsupported_action(resource: &ServiceResource) -> anyhow::Error {
         resource.provider,
         resource.action.as_str()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lines(source: &str) -> Vec<String> {
+        source.lines().map(str::trim).map(str::to_string).collect()
+    }
+
+    #[test]
+    fn parses_brew_started_services() {
+        let status = parse_brew_services(&lines(
+            r#"
+            Name          Status  User     File
+            atuin         none
+            borders       started phcurado ~/Library/LaunchAgents/homebrew.mxcl.borders.plist
+            sketchybar    started phcurado ~/Library/LaunchAgents/homebrew.mxcl.sketchybar.plist
+            syncthing     none
+            "#,
+        ));
+
+        assert!(status.started.contains("borders"));
+        assert!(status.started.contains("sketchybar"));
+        assert!(!status.started.contains("atuin"));
+    }
+
+    #[test]
+    fn parses_systemd_started_and_enabled_services() {
+        let status = parse_systemd_services(
+            &lines(
+                r#"
+                docker.service loaded active running Docker Application Container Engine
+                tailscaled.service loaded active running Tailscale node agent
+                "#,
+            ),
+            &lines(
+                r#"
+                docker.service enabled disabled
+                postgresql.service enabled disabled
+                sddm.service disabled disabled
+                "#,
+            ),
+        );
+
+        assert!(status.started.contains("docker.service"));
+        assert!(status.started.contains("tailscaled.service"));
+        assert!(status.enabled.contains("docker.service"));
+        assert!(status.enabled.contains("postgresql.service"));
+        assert!(!status.enabled.contains("sddm.service"));
+    }
 }

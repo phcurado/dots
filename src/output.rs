@@ -76,7 +76,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
     summary
 }
 
-pub(crate) fn print_plan(project: &Project, plan: &[PlanStep]) {
+pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: bool) {
     let summary = summarize_plan(plan);
     let has_changes = summary.create + summary.update + summary.remove + summary.conflicts > 0;
     if !has_changes {
@@ -278,6 +278,13 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep]) {
             ".".to_string()
         }
     );
+
+    if show_apply_hint
+        && summary.conflicts == 0
+        && summary.create + summary.update + summary.remove > 0
+    {
+        println!("{}", dim("Run `dots apply` to apply these changes."));
+    }
 }
 
 pub(crate) fn print_state(project: &Project, state: &State) {

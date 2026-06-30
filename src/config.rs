@@ -496,11 +496,15 @@ mod tests {
     fn duplicate_symlink_target_with_same_source_is_deduped() {
         let project = temp_project(
             r#"
-            dots.symlink("/tmp/dots-test-target", "source")
-            dots.symlink("/tmp/dots-test-target", "source")
+            dots.symlink("TARGET", "source")
+            dots.symlink("TARGET", "source")
             "#,
         );
         fs::write(project.root.join("source"), "").unwrap();
+        let source = fs::read_to_string(&project.config)
+            .unwrap()
+            .replace("TARGET", &project.root.join("target").display().to_string());
+        fs::write(&project.config, source).unwrap();
 
         let config = load_config(&project, "test").unwrap();
 
@@ -511,12 +515,16 @@ mod tests {
     fn duplicate_symlink_target_with_different_source_errors() {
         let project = temp_project(
             r#"
-            dots.symlink("/tmp/dots-test-target", "one")
-            dots.symlink("/tmp/dots-test-target", "two")
+            dots.symlink("TARGET", "one")
+            dots.symlink("TARGET", "two")
             "#,
         );
         fs::write(project.root.join("one"), "").unwrap();
         fs::write(project.root.join("two"), "").unwrap();
+        let source = fs::read_to_string(&project.config)
+            .unwrap()
+            .replace("TARGET", &project.root.join("target").display().to_string());
+        fs::write(&project.config, source).unwrap();
 
         let error = load_config(&project, "test").unwrap_err().to_string();
 

@@ -28,9 +28,12 @@ pub(crate) fn package_installed(
     run_provider_command(&provider.installed, Some(&resource.name), true)
 }
 
+type PackageSet = BTreeSet<String>;
+type OptionalPackageSet = Option<PackageSet>;
+
 #[derive(Debug, Default)]
 pub(crate) struct PackageStatusCache {
-    providers: BTreeMap<String, Option<BTreeSet<String>>>,
+    providers: BTreeMap<String, OptionalPackageSet>,
 }
 
 pub(crate) fn package_installed_cached(
@@ -52,25 +55,97 @@ fn packages_for_provider(
     cache: &mut PackageStatusCache,
     provider: &str,
 ) -> Result<Option<BTreeSet<String>>> {
-    if let Some(packages) = cache.providers.get(provider) {
-        return Ok(packages.clone());
+    if !cache.providers.contains_key(provider) {
+        populate_provider_cache(cache, provider)?;
     }
+    Ok(cache.providers.get(provider).cloned().unwrap_or(None))
+}
+
+fn populate_provider_cache(cache: &mut PackageStatusCache, provider: &str) -> Result<()> {
+    if matches!(provider, "brew" | "brew-cask") {
+        let (formulae, casks) = list_brew_packages()?;
+        cache.providers.insert("brew".to_string(), formulae);
+        cache.providers.insert("brew-cask".to_string(), casks);
+        return Ok(());
+    }
+
     let packages = list_installed_packages(provider)?;
-    cache
-        .providers
-        .insert(provider.to_string(), packages.clone());
-    Ok(packages)
+    cache.providers.insert(provider.to_string(), packages);
+    Ok(())
 }
 
 fn list_installed_packages(provider: &str) -> Result<Option<BTreeSet<String>>> {
     let command = match provider {
         "pacman" | "paru" => "pacman -Qq",
         "apt" => "dpkg-query -W -f='${binary:Package}\\n'",
-        "brew" => "brew list --formula -1",
-        "brew-cask" => "brew list --cask -1",
         "brew-tap" => "brew tap",
         _ => return Ok(None),
     };
+    command_set(command)
+}
+
+fn list_brew_packages() -> Result<(OptionalPackageSet, OptionalPackageSet)> {
+    let output = ProcessCommand::new("brew")
+        .args(["info", "--json=v2", "--installed"])
+        .stdin(Stdio::null())
+        .output()?;
+    if output.status.success() {
+        return parse_brew_info_json(&output.stdout)
+            .map(|(formulae, casks)| (Some(formulae), Some(casks)));
+    }
+
+    Ok((
+        command_set("brew list --formula -1")?,
+        command_set("brew list --cask -1")?,
+    ))
+}
+
+fn parse_brew_info_json(source: &[u8]) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let value: serde_json::Value = serde_json::from_slice(source)?;
+    let mut formulae = BTreeSet::new();
+    for formula in value
+        .get("formulae")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+    {
+        insert_json_string(&mut formulae, formula.get("name"));
+        insert_json_string(&mut formulae, formula.get("full_name"));
+        insert_json_string_array(&mut formulae, formula.get("aliases"));
+        insert_json_string_array(&mut formulae, formula.get("oldnames"));
+    }
+
+    let mut casks = BTreeSet::new();
+    for cask in value
+        .get("casks")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+    {
+        insert_json_string(&mut casks, cask.get("token"));
+        insert_json_string(&mut casks, cask.get("full_token"));
+        insert_json_string_array(&mut casks, cask.get("old_tokens"));
+    }
+
+    Ok((formulae, casks))
+}
+
+fn insert_json_string(values: &mut BTreeSet<String>, value: Option<&serde_json::Value>) {
+    if let Some(value) = value.and_then(|value| value.as_str()) {
+        values.insert(value.to_string());
+    }
+}
+
+fn insert_json_string_array(values: &mut BTreeSet<String>, value: Option<&serde_json::Value>) {
+    let Some(values_json) = value.and_then(|value| value.as_array()) else {
+        return;
+    };
+    for value in values_json {
+        insert_json_string(values, Some(value));
+    }
+}
+
+fn command_set(command: &str) -> Result<Option<BTreeSet<String>>> {
     let output = ProcessCommand::new("sh")
         .arg("-c")
         .arg(command)
@@ -110,4 +185,39 @@ pub(crate) fn run_provider_command(
         process.stdout(Stdio::null()).stderr(Stdio::null());
     }
     Ok(process.status()?.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brew_info_parser_includes_formula_aliases() {
+        let source = br#"
+        {
+          "formulae": [
+            {
+              "name": "sevenzip",
+              "full_name": "sevenzip",
+              "aliases": ["7zip"],
+              "oldnames": []
+            }
+          ],
+          "casks": [
+            {
+              "token": "aerospace",
+              "full_token": "nikitabobko/tap/aerospace",
+              "old_tokens": []
+            }
+          ]
+        }
+        "#;
+
+        let (formulae, casks) = parse_brew_info_json(source).unwrap();
+
+        assert!(formulae.contains("sevenzip"));
+        assert!(formulae.contains("7zip"));
+        assert!(casks.contains("aerospace"));
+        assert!(casks.contains("nikitabobko/tap/aerospace"));
+    }
 }
