@@ -6,8 +6,12 @@ use anyhow::Result;
 
 use crate::config::Config;
 use crate::font::{FontResource, font_matches};
-use crate::package::{PackageProvider, PackageResource, package_installed};
-use crate::service::{ServiceProvider, ServiceResource, service_current};
+use crate::package::{
+    PackageProvider, PackageResource, PackageStatusCache, package_installed_cached,
+};
+use crate::service::{
+    ServiceProvider, ServiceResource, ServiceStatusCache, service_current_cached,
+};
 use crate::state::{State, StateResource};
 use crate::symlink::{
     SymlinkResource, regular_file_matches, resolve_symlink_target, same_path, state_symlink,
@@ -140,6 +144,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    let mut package_status = PackageStatusCache::default();
     for resource in &config.packages {
         let id = package_id_for(resource);
         declared.insert(id.clone());
@@ -151,7 +156,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             });
             continue;
         };
-        if package_installed(provider, resource)? {
+        if package_installed_cached(&mut package_status, provider, resource)? {
             plan.push(PlanStep::PackageNoop(resource.clone()));
         } else {
             plan.push(PlanStep::PackageCreate {
@@ -183,6 +188,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    let mut service_status = ServiceStatusCache::default();
     for resource in &config.services {
         let id = service_id_for(resource);
         declared.insert(id.clone());
@@ -194,7 +200,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             });
             continue;
         };
-        if service_current(provider, resource)? {
+        if service_current_cached(&mut service_status, provider, resource)? {
             plan.push(PlanStep::ServiceNoop(resource.clone()));
         } else {
             plan.push(PlanStep::ServiceCreate {
