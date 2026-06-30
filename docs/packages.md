@@ -8,9 +8,13 @@ machine setup.
 Package managers are available as namespaces:
 
 ```lua
-dots.pacman.install({ "base-devel", "git", "paru" })
+dots.pacman.install({ "base-devel", "git" })
+dots.paru.enable({ method = "pacman" })
 dots.paru.install({ "bat", "ripgrep" })
+
 dots.apt.install({ "bat", "ripgrep" })
+
+dots.brew.enable()
 dots.brew.install({ "bat", "ripgrep" })
 dots.brew.cask({ "ghostty" })
 ```
@@ -23,6 +27,10 @@ The built-in providers are:
 - `brew`
 - `brew-cask`, exposed as `dots.brew.cask(...)`
 - `brew-tap`, exposed as `dots.brew.tap(...)`
+
+`dots.brew.enable()` can install Homebrew if it is missing. `dots.paru.enable({
+method = "pacman" })` declares `paru` through pacman and makes the `paru`
+provider available to later package declarations.
 
 ## Choosing packages by platform
 

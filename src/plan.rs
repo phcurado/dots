@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
+use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::Result;
 
@@ -9,6 +10,7 @@ use crate::config::Config;
 use crate::font::{FontResource, font_matches};
 use crate::package::{
     PackageProvider, PackageResource, PackageStatusCache, package_installed_cached,
+    package_provider_available,
 };
 use crate::service::{
     ServiceProvider, ServiceResource, ServiceStatusCache, service_current_cached,
@@ -86,6 +88,10 @@ pub(crate) enum PlanStep {
     },
     CommandCreate(CommandResource),
     CommandNoop(CommandResource),
+    CapabilityConflict {
+        capability: String,
+        reason: String,
+    },
 }
 
 pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> Result<()> {
@@ -163,6 +169,12 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    let (command_steps, mut provided_capabilities) = plan_commands(&config.commands)?;
+    for resource in &config.packages {
+        provided_capabilities.extend(package_provides(resource));
+    }
+
+    let mut missing_capabilities = BTreeSet::new();
     let mut package_status = PackageStatusCache::default();
     for resource in &config.packages {
         let id = package_id_for(resource);
@@ -175,6 +187,16 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             });
             continue;
         };
+        let capability = provider_capability(&resource.provider);
+        if !provided_capabilities.contains(&capability) && !package_provider_available(provider)? {
+            if missing_capabilities.insert(capability.clone()) {
+                plan.push(PlanStep::CapabilityConflict {
+                    capability: capability_name(&capability),
+                    reason: "is not available".to_string(),
+                });
+            }
+            continue;
+        }
         if package_installed_cached(&mut package_status, provider, resource)? {
             plan.push(PlanStep::PackageNoop(resource.clone()));
         } else {
@@ -207,7 +229,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
-    plan_commands(&config.commands, &mut plan)?;
+    plan.extend(command_steps);
 
     let mut service_status = ServiceStatusCache::default();
     for resource in &config.services {
@@ -221,6 +243,16 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             });
             continue;
         };
+        let capability = provider_capability(&resource.provider);
+        if !provided_capabilities.contains(&capability) && !capability_available(&capability)? {
+            if missing_capabilities.insert(capability.clone()) {
+                plan.push(PlanStep::CapabilityConflict {
+                    capability: capability_name(&capability),
+                    reason: "is not available".to_string(),
+                });
+            }
+            continue;
+        }
         if service_current_cached(&mut service_status, provider, resource)? {
             plan.push(PlanStep::ServiceNoop(resource.clone()));
         } else {
@@ -323,15 +355,55 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
     Ok(plan)
 }
 
-fn plan_commands(commands: &[CommandResource], plan: &mut Vec<PlanStep>) -> Result<()> {
+fn plan_commands(commands: &[CommandResource]) -> Result<(Vec<PlanStep>, BTreeSet<String>)> {
+    let mut plan = Vec::new();
+    let mut provided = BTreeSet::new();
     for resource in commands {
+        provided.extend(resource.provides.iter().cloned());
         if command_current(resource)? {
             plan.push(PlanStep::CommandNoop(resource.clone()));
         } else {
             plan.push(PlanStep::CommandCreate(resource.clone()));
         }
     }
-    Ok(())
+    Ok((plan, provided))
+}
+
+fn package_provides(resource: &PackageResource) -> Vec<String> {
+    match (resource.provider.as_str(), resource.name.as_str()) {
+        ("pacman", "paru") => vec!["provider:paru".to_string()],
+        _ => Vec::new(),
+    }
+}
+
+fn provider_capability(provider: &str) -> String {
+    match provider {
+        "brew" | "brew-cask" | "brew-tap" | "brew-service" => "provider:brew".to_string(),
+        provider => format!("provider:{provider}"),
+    }
+}
+
+fn capability_name(capability: &str) -> String {
+    capability
+        .strip_prefix("provider:")
+        .unwrap_or(capability)
+        .to_string()
+}
+
+fn capability_available(capability: &str) -> Result<bool> {
+    let command = match capability {
+        "provider:brew" => "command -v brew >/dev/null",
+        "provider:systemd" => "command -v systemctl >/dev/null",
+        _ => return Ok(true),
+    };
+    Ok(ProcessCommand::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?
+        .success())
 }
 
 pub(crate) fn state_package(resource: &PackageResource) -> StateResource {
@@ -380,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_does_not_check_provider_availability() {
+    fn missing_provider_is_a_capability_conflict() {
         let mut config = Config::default();
         config
             .package_providers
@@ -392,7 +464,36 @@ mod tests {
 
         let plan = build_plan(&config, &State::default()).unwrap();
 
-        assert!(matches!(plan.as_slice(), [PlanStep::PackageCreate { .. }]));
+        assert!(matches!(
+            plan.as_slice(),
+            [PlanStep::CapabilityConflict { capability, .. }] if capability == "fake"
+        ));
+    }
+
+    #[test]
+    fn planned_provider_skips_availability_conflict() {
+        let mut config = Config::default();
+        config.commands.push(CommandResource {
+            name: "fake provider".to_string(),
+            check: "exit 1".to_string(),
+            apply: "exit 0".to_string(),
+            needs: Vec::new(),
+            provides: vec!["provider:fake".to_string()],
+        });
+        config
+            .package_providers
+            .insert("fake".to_string(), fake_provider("exit 1", "exit 1"));
+        config.packages.push(PackageResource {
+            provider: "fake".to_string(),
+            name: "bat".to_string(),
+        });
+
+        let plan = build_plan(&config, &State::default()).unwrap();
+
+        assert!(matches!(
+            plan.as_slice(),
+            [PlanStep::PackageCreate { .. }, PlanStep::CommandCreate(_)]
+        ));
     }
 
     #[test]

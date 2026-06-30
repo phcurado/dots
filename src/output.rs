@@ -65,7 +65,8 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
             | PlanStep::FontConflict { .. }
-            | PlanStep::UserGroupConflict { .. } => summary.conflicts += 1,
+            | PlanStep::UserGroupConflict { .. }
+            | PlanStep::CapabilityConflict { .. } => summary.conflicts += 1,
             PlanStep::SymlinkNoop(_)
             | PlanStep::PackageNoop(_)
             | PlanStep::ServiceNoop(_)
@@ -84,6 +85,18 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
     if !has_changes {
         println!("{}", dim("No changes."));
         return;
+    }
+
+    let has_capabilities = plan
+        .iter()
+        .any(|step| matches!(step, PlanStep::CapabilityConflict { .. }));
+    if has_capabilities {
+        println!("{}", bold("Capabilities:"));
+        for step in plan {
+            if let PlanStep::CapabilityConflict { capability, reason } = step {
+                println!("  {} {} {reason}", red("!"), capability);
+            }
+        }
     }
 
     let has_symlinks = plan.iter().any(|step| {
@@ -137,7 +150,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_packages {
-        if has_symlinks {
+        if has_capabilities || has_symlinks {
             println!();
         }
         println!("{}", bold("Packages:"));
@@ -170,7 +183,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_fonts {
-        if has_symlinks || has_packages {
+        if has_capabilities || has_symlinks || has_packages {
             println!();
         }
         println!("{}", bold("Fonts:"));
@@ -199,7 +212,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         .iter()
         .any(|step| matches!(step, PlanStep::CommandCreate(_)));
     if has_commands {
-        if has_symlinks || has_packages || has_fonts {
+        if has_capabilities || has_symlinks || has_packages || has_fonts {
             println!();
         }
         println!("{}", bold("Commands:"));
@@ -219,7 +232,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_services {
-        if has_symlinks || has_packages || has_fonts || has_commands {
+        if has_capabilities || has_symlinks || has_packages || has_fonts || has_commands {
             println!();
         }
         println!("{}", bold("Services:"));
@@ -260,7 +273,13 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_user {
-        if has_symlinks || has_packages || has_fonts || has_commands || has_services {
+        if has_capabilities
+            || has_symlinks
+            || has_packages
+            || has_fonts
+            || has_commands
+            || has_services
+        {
             println!();
         }
         println!("{}", bold("User:"));

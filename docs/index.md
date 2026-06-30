@@ -23,6 +23,7 @@ or changing symlinks.
 - [Platforms and profiles](platforms-and-profiles.md): share one repo across different machines.
 - [Symlinks](symlinks.md): put repo files where programs expect them.
 - [Packages](packages.md): install packages with `pacman`, `paru`, `apt`, or Homebrew.
+- [Commands](commands.md): manage checked setup commands and ordering.
 - [Services](services.md): start or enable systemd and Homebrew services.
 - [Fonts](fonts.md): keep fonts in the repo and install them for the current OS.
 - [User](user.md): set the login shell or add the current user to groups.

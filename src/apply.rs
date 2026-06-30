@@ -160,7 +160,8 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
             | PlanStep::FontConflict { .. }
-            | PlanStep::UserGroupConflict { .. } => unreachable!(),
+            | PlanStep::UserGroupConflict { .. }
+            | PlanStep::CapabilityConflict { .. } => unreachable!(),
         }
     }
 
