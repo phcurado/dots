@@ -1,9 +1,7 @@
 # Packages
 
-A dotfiles repo often assumes a few tools are installed. Your shell might call
-`fzf`, Neovim might use `ripgrep`, and a macOS setup might need Homebrew casks.
-`dots` lets you declare those packages in the same place as the rest of the
-machine setup.
+Packages are resources. `dots check` reports missing packages, and `dots apply`
+installs them with the selected package manager.
 
 Package managers are available as namespaces:
 
@@ -34,22 +32,22 @@ provider available to later package declarations.
 
 ## Choosing packages by platform
 
-Let's say the same repo is used on Arch and macOS. You can keep common packages
-in one table and add platform-specific packages next to them:
+Use platform branches when package managers or package names differ:
 
 ```lua
 local common_packages = { "bat", "ripgrep" }
 
 if dots.platform.family == "arch" then
-  dots.pacman.install({ "base-devel", "git", "paru" })
+  dots.pacman.install({ "base-devel", "git" })
+  dots.paru.enable({ method = "pacman" })
   dots.paru.install(common_packages)
 end
 
 if dots.platform.family == "darwin" then
-  dots.brew.tap({ "FelixKratz/formulae" })
+  dots.brew.enable()
   dots.brew.install(common_packages)
-  dots.brew.install({ "wget", "sketchybar" })
-  dots.brew.cask({ "ghostty" })
+  dots.brew.install({ "wget" })
+  dots.brew.cask({ "firefox" })
 end
 ```
 
@@ -130,9 +128,10 @@ dots.brew.cask = dots["brew-cask"].install
 Provider commands run through `sh -c`. The package name is passed in the
 `DOTS_PACKAGE` environment variable.
 
-Provider availability is checked during `apply`, not during `check`. That makes
-bootstrap flows possible. For example, an Arch config can install `paru` with
-`pacman` and use `paru` later in the same apply.
+If a provider is missing, `dots check` reports it before listing the affected
+packages. Provider enable helpers can satisfy that requirement in the same
+apply. For example, `dots.paru.enable({ method = "pacman" })` declares `paru`
+through pacman, so later `dots.paru.install(...)` declarations can run after it.
 
 ## Custom providers
 

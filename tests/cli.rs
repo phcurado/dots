@@ -127,6 +127,62 @@ fn default_command_without_config_fails_without_prompt_when_not_interactive() {
 }
 
 #[test]
+fn check_prints_command_changes() {
+    let root = temp_dir("cli-command");
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        dots.command("oh-my-zsh", {
+          check = "exit 1",
+          apply = "exit 0",
+        })
+        "#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Commands:"));
+    assert!(stdout.contains("+ oh-my-zsh"));
+}
+
+#[test]
+fn check_prints_capability_conflicts() {
+    let root = temp_dir("cli-capability");
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        dots.provider.package("fake", {
+          available = "exit 1",
+          installed = "exit 1",
+          install = "exit 0",
+          remove = "exit 0",
+        })
+
+        dots.fake.install({ "bat" })
+        "#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Capabilities:"));
+    assert!(stdout.contains("! fake is not available"));
+}
+
+#[test]
 fn apply_requires_yes() {
     let root = temp_dir("cli-apply-confirm");
     fs::write(

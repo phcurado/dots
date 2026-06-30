@@ -8,7 +8,7 @@ Install the latest release:
 curl -fsSL https://raw.githubusercontent.com/phcurado/dots/main/install.sh | sh
 ```
 
-If you're working from a local checkout of `dots`, use the Makefile instead:
+From a local checkout of `dots`, use the Makefile instead:
 
 ```sh
 make install
@@ -52,7 +52,7 @@ If `~/.zshrc` is already the right symlink, the output is quiet:
 No changes.
 ```
 
-On a fresh machine, you might see:
+On a fresh machine, the check shows a create:
 
 ```diff
 Symlinks:
@@ -67,10 +67,12 @@ Add one package for your platform:
 
 ```lua
 if dots.platform.family == "arch" then
+  dots.paru.enable({ method = "pacman" })
   dots.paru.install({ "ripgrep" })
 end
 
 if dots.platform.family == "darwin" then
+  dots.brew.enable()
   dots.brew.install({ "ripgrep" })
 end
 ```
@@ -95,7 +97,7 @@ install anything during check.
 
 ## Apply
 
-When the check looks right, apply it:
+Apply the checked changes:
 
 ```sh
 dots apply

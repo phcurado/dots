@@ -174,6 +174,13 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
         red(&summary.remove.to_string()),
     );
 
+    if plan
+        .iter()
+        .any(|step| matches!(step, PlanStep::UserShellUpdate { .. }))
+    {
+        println!("Restart your login session for the shell change to take effect.");
+    }
+
     Ok(())
 }
 

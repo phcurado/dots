@@ -42,8 +42,8 @@ dots.symlink("~/.gitconfig", ".gitconfig")
 dots.fonts.install()
 ```
 
-This is usually the boring part of the repo: files, fonts, shell choice, and
-anything that is true on every machine.
+Use this module for declarations that apply to every machine: files, fonts,
+shell choice, and shared commands.
 
 ## Split by platform when the resource is platform-specific
 
@@ -51,7 +51,8 @@ Platform files are useful for package managers, services, or OS-only settings:
 
 ```lua
 -- dots/arch.lua
-dots.pacman.install({ "base-devel", "git", "paru" })
+dots.pacman.install({ "base-devel", "git" })
+dots.paru.enable({ method = "pacman" })
 dots.paru.install({ "bat", "docker", "ripgrep" })
 
 dots.user.groups({ "docker" })
@@ -61,14 +62,13 @@ dots.systemd.start({ "docker.service" })
 
 ```lua
 -- dots/macos.lua
+dots.brew.enable()
 dots.brew.install({ "bat", "ripgrep" })
 dots.brew.cask({ "ghostty", "obsidian" })
 ```
 
-This is similar to how Nix configurations are usually organized: a top-level
-file imports common modules, then imports system-specific or host-specific
-modules. The difference is that `dots` uses plain Lua instead of a module system
-of its own.
+The top-level file stays small: it loads common declarations first, then loads
+platform-specific declarations for the current machine.
 
 ## Profiles are for machines or personas
 

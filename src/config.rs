@@ -90,6 +90,8 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let collected_commands = commands.clone();
     let command = lua.create_function(move |lua, (name, spec): (String, Table)| {
         let item = lua.create_table()?;
+        let id = format!("command:{name}");
+        item.set("id", id.clone())?;
         item.set("name", name)?;
         item.set("check", spec.get::<String>("check")?)?;
         item.set("apply", spec.get::<String>("apply")?)?;
@@ -100,7 +102,10 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             item.set("provides", provides)?;
         }
         collected_commands.raw_push(item)?;
-        Ok(())
+
+        let reference = lua.create_table()?;
+        reference.set("id", id)?;
+        Ok(reference)
     })?;
 
     let user = lua.create_table()?;
@@ -205,8 +210,8 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             name: item.get::<String>("name")?,
             check: item.get::<String>("check")?,
             apply: item.get::<String>("apply")?,
-            needs: table_strings(item.get::<Option<Table>>("needs")?)?,
-            provides: table_strings(item.get::<Option<Table>>("provides")?)?,
+            needs: table_references(item.get::<Option<Table>>("needs")?)?,
+            provides: table_references(item.get::<Option<Table>>("provides")?)?,
         });
     }
     if let Some(shell) = user_shell.get::<Option<String>>("name")? {
@@ -503,7 +508,26 @@ fn table_strings(table: Option<Table>) -> mlua::Result<Vec<String>> {
             Value::String(value) => values.push(value.to_string_lossy()),
             other => {
                 return Err(mlua::Error::RuntimeError(format!(
-                    "ignore patterns must be strings, got {other:?}"
+                    "expected strings, got {other:?}"
+                )));
+            }
+        }
+    }
+    Ok(values)
+}
+
+fn table_references(table: Option<Table>) -> mlua::Result<Vec<String>> {
+    let Some(table) = table else {
+        return Ok(Vec::new());
+    };
+    let mut values = Vec::new();
+    for value in table.sequence_values::<Value>() {
+        match value? {
+            Value::String(value) => values.push(value.to_string_lossy()),
+            Value::Table(table) => values.push(table.get::<String>("id")?),
+            other => {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "expected strings or resource references, got {other:?}"
                 )));
             }
         }
@@ -514,13 +538,12 @@ fn table_strings(table: Option<Table>) -> mlua::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
     fn temp_project(config: &str) -> Project {
-        let id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let root =
             std::env::temp_dir().join(format!("dots-config-test-{}-{id}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
@@ -767,6 +790,27 @@ mod tests {
         assert_eq!(config.commands.len(), 2);
         assert_eq!(config.commands[0].name, "mise");
         assert_eq!(config.commands[1].name, "pi");
+    }
+
+    #[test]
+    fn command_returns_reference_for_needs() {
+        let project = temp_project(
+            r#"
+            local node = dots.command("node", {
+              check = "exit 1",
+              apply = "exit 0",
+            })
+            dots.command("prettier", {
+              check = "exit 1",
+              apply = "exit 0",
+              needs = { node },
+            })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.commands[1].needs, vec!["command:node"]);
     }
 
     #[test]

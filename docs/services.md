@@ -1,10 +1,7 @@
 # Services
 
-Some tools need a service to be running after the package is installed. Docker is
-a good example on Linux. SketchyBar and Borders are good examples on macOS when
-they are managed by Homebrew services.
-
-Declare those services next to the rest of the machine setup:
+Services are resources backed by a service manager. `dots check` reports whether
+the service action is missing, and `dots apply` runs the corresponding command.
 
 ```lua
 if dots.platform.family == "arch" then
@@ -13,12 +10,14 @@ if dots.platform.family == "arch" then
 end
 
 if dots.platform.family == "darwin" then
-  dots.brew.service.start({ "sketchybar", "borders" })
+  dots.brew.enable()
+  dots.brew.install({ "postgresql@16" })
+  dots.brew.service.start({ "postgresql@16" })
 end
 ```
 
-`enable` and `start` are separate. On Linux, `enable` controls whether the unit
-starts at boot. `start` controls whether it is running now.
+`enable` and `start` are separate actions. `enable` means the service should
+start at boot. `start` means the service should be running now.
 
 ## systemd
 
@@ -34,7 +33,7 @@ Use `start` when the unit should be active now:
 dots.systemd.start({ "docker.service" })
 ```
 
-If you remove those declarations later, `dots check` shows the reverse operation:
+If you remove those declarations later, `dots check` shows the reverse action:
 
 - `enable` becomes `disable`
 - `start` becomes `stop`
@@ -44,7 +43,9 @@ If you remove those declarations later, `dots check` shows the reverse operation
 Homebrew services currently support `start`:
 
 ```lua
-dots.brew.service.start({ "sketchybar", "borders" })
+dots.brew.enable()
+dots.brew.install({ "postgresql@16" })
+dots.brew.service.start({ "postgresql@16" })
 ```
 
 If you remove the declaration, `dots` runs `brew services stop` for that service.

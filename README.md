@@ -48,7 +48,7 @@ Check what would happen:
 dots check
 ```
 
-On a fresh machine, you should see something like this:
+On a fresh machine, the check shows a create:
 
 ```diff
 Symlinks:
@@ -61,10 +61,12 @@ Add packages when you're ready:
 
 ```lua
 if dots.platform.family == "arch" then
+  dots.paru.enable({ method = "pacman" })
   dots.paru.install({ "bat", "ripgrep" })
 end
 
 if dots.platform.family == "darwin" then
+  dots.brew.enable()
   dots.brew.install({ "bat", "ripgrep" })
 end
 ```
