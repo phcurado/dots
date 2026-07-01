@@ -5,6 +5,8 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.85"
 description = "Declarative workstation configuration with Terraform-style planning."
+homepage = "https://phcurado.github.io/dots/"
+repository = "https://github.com/phcurado/dots"
 exclude = [".github/", "docs/", "logo.png"]
 
 [dependencies]
