@@ -35,7 +35,10 @@ export default defineConfig({
       },
       {
         text: "Project",
-        items: [{ text: "Release", link: "/release" }],
+        items: [
+          { text: "Changelog", link: "/changelog" },
+          { text: "Release", link: "/release" },
+        ],
       },
     ],
   },

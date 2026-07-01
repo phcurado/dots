@@ -24,4 +24,5 @@ other pages go deeper into each part of the config.
 - [Platforms and profiles](platforms-and-profiles.md): share one repo across operating systems, machines, or profiles.
 - [Organization](organization.md): split `dots.lua` into normal Lua modules.
 - [State](state.md): inspect or forget what `dots` manages.
+- [Changelog](changelog.md): see what changed between releases.
 - [Release](release.md): publish a tagged GitHub release.
