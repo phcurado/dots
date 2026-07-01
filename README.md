@@ -37,7 +37,7 @@ Create a dotfiles repo, or use one you already have:
 dots init
 ```
 
-The command above creates the `dots.lua` file, which main entrypoint for your configuration.
+The command above creates the file `dots.lua`, the main entrypoint for your configuration.
 You can manage symlinks, packages, services, and more:
 
 ```lua
@@ -70,17 +70,17 @@ On a fresh Arch distro, it should show:
 
 ```diff
 Symlinks:
-  + symlink ~/.zshrc -> .zshrc
++ symlink ~/.zshrc -> .zshrc
 
 Packages:
-  + pacman base-devel
-  + pacman git
-  + yay bat
-  + yay ripgrep
++ pacman base-devel
++ pacman git
++ yay bat
++ yay ripgrep
 
 Services:
-  + systemd enable docker.service
-  + systemd start docker.service
++ systemd enable docker.service
++ systemd start docker.service
 
 Check: 7 to create, 0 to update, 0 to destroy.
 ```
@@ -91,9 +91,8 @@ Apply the changes:
 dots apply
 ```
 
-`dots` will create the symlinks, install the packages, and start the services declared.
+`dots` will create the symlinks, install the packages, and start the services you declared.
 You declare what the system should have and how it should behave, then reuse the
 same setup across the machines that need it.
 
-See the [docs](docs/index.md) for symlinks, packages, services, fonts, user
-settings, profiles, and state.
+See the [docs](https://phcurado.github.io/dots/) for more.
