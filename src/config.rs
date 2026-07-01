@@ -16,7 +16,7 @@ use crate::symlink::{
     SymlinkDeclaration, SymlinkResource, expand_home, expand_symlink_declaration, resolve_source,
     same_path,
 };
-use crate::user::{UserConfig, UserGroupResource, resolve_shell};
+use crate::user::{SystemGroupResource, UserConfig, UserGroupResource, resolve_shell};
 
 #[derive(Debug, Default)]
 pub(crate) struct Config {
@@ -40,6 +40,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let services = lua.create_table()?;
     let font_sources = lua.create_table()?;
     let commands = lua.create_table()?;
+    let system_groups = lua.create_table()?;
     let user_groups = lua.create_table()?;
     let user_shell = lua.create_table()?;
     let dots = lua.create_table()?;
@@ -108,6 +109,18 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         Ok(reference)
     })?;
 
+    let group = lua.create_table()?;
+    let collected_system_groups = system_groups.clone();
+    let create_group = lua.create_function(move |lua, group_list: Table| {
+        for name in table_strings(Some(group_list))? {
+            let item = lua.create_table()?;
+            item.set("name", name)?;
+            collected_system_groups.raw_push(item)?;
+        }
+        Ok(())
+    })?;
+    group.set("create", create_group)?;
+
     let user = lua.create_table()?;
     let collected_user_shell = user_shell.clone();
     let shell = lua.create_function(move |_, shell: String| {
@@ -115,7 +128,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         Ok(())
     })?;
     let collected_user_groups = user_groups.clone();
-    let groups = lua.create_function(move |lua, group_list: Table| {
+    let add_to_groups = lua.create_function(move |lua, group_list: Table| {
         for name in table_strings(Some(group_list))? {
             let item = lua.create_table()?;
             item.set("name", name)?;
@@ -124,13 +137,14 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         Ok(())
     })?;
     user.set("shell", shell)?;
-    user.set("groups", groups)?;
+    user.set("add_to_groups", add_to_groups)?;
 
     let platform = platform_table(&lua)?;
 
     dots.set("symlink", symlink)?;
     dots.set("fonts", fonts)?;
     dots.set("command", command)?;
+    dots.set("group", group)?;
     dots.set("user", user)?;
     dots.set("profile", profile)?;
     dots.set("platform", platform)?;
@@ -217,9 +231,15 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     if let Some(shell) = user_shell.get::<Option<String>>("name")? {
         config.user.shell = Some(resolve_shell(&shell)?);
     }
+    for item in system_groups.sequence_values::<Table>() {
+        let item = item?;
+        config.user.groups.push(SystemGroupResource {
+            name: item.get::<String>("name")?,
+        });
+    }
     for item in user_groups.sequence_values::<Table>() {
         let item = item?;
-        config.user.groups.push(UserGroupResource {
+        config.user.memberships.push(UserGroupResource {
             name: item.get::<String>("name")?,
         });
     }
@@ -309,6 +329,12 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
         .user
         .groups
         .retain(|resource| group_names.insert(resource.name.clone()));
+
+    let mut membership_names = BTreeSet::new();
+    config
+        .user
+        .memberships
+        .retain(|resource| membership_names.insert(resource.name.clone()));
 
     Ok(())
 }
@@ -764,7 +790,8 @@ mod tests {
         let project = temp_project(
             r#"
             dots.user.shell("sh")
-            dots.user.groups({ "docker", "docker" })
+            dots.group.create({ "media", "media" })
+            dots.user.add_to_groups({ "docker", "docker" })
             "#,
         );
 
@@ -773,7 +800,9 @@ mod tests {
         let shell = config.user.shell.unwrap();
         assert_eq!(shell.name, "sh");
         assert_eq!(config.user.groups.len(), 1);
-        assert_eq!(config.user.groups[0].name, "docker");
+        assert_eq!(config.user.groups[0].name, "media");
+        assert_eq!(config.user.memberships.len(), 1);
+        assert_eq!(config.user.memberships[0].name, "docker");
     }
 
     #[test]

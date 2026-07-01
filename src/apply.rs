@@ -10,12 +10,16 @@ use crate::package::{
     PackageProvider, PackageResource, package_provider_available, run_provider_command,
 };
 use crate::plan::{
-    PlanStep, font_id_for, package_id_for, service_id_for, state_package, state_service,
+    PlanStep, font_id_for, group_id_for, package_id_for, service_id_for, state_group,
+    state_package, state_service, state_user_group, user_group_id_for,
 };
 use crate::service::{ServiceProvider, ServiceResource, service_apply, service_remove};
 use crate::state::{State, StateResource};
 use crate::symlink::{apply_symlink, remove_symlink, state_symlink, symlink_id_for};
-use crate::user::{UserGroupResource, UserShellResource, apply_group, apply_shell};
+use crate::user::{
+    SystemGroupResource, UserGroupResource, UserShellResource, apply_group, apply_shell,
+    create_group, remove_group, remove_user_from_group,
+};
 
 pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
     let summary = summarize_plan(plan);
@@ -152,17 +156,37 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                 &format!("user.shell.{}", resource.name),
                 || update_shell(resource),
             )?,
+            PlanStep::SystemGroupCreate(resource) => apply_with_status(
+                "Creating",
+                "Create",
+                &format!("group.{}", resource.name),
+                || add_system_group(resource, state),
+            )?,
+            PlanStep::SystemGroupRemove(resource) => apply_with_status(
+                "Removing",
+                "Remove",
+                &format!("group.{}", resource.name),
+                || delete_system_group(resource, state),
+            )?,
             PlanStep::UserGroupAdd(resource) => apply_with_status(
                 "Adding",
                 "Add",
                 &format!("user.group.{}", resource.name),
-                || add_group(resource),
+                || add_group(resource, state),
             )?,
-            PlanStep::UserShellNoop | PlanStep::UserGroupNoop => {}
+            PlanStep::UserGroupRemove(resource) => apply_with_status(
+                "Removing",
+                "Remove",
+                &format!("user.group.{}", resource.name),
+                || delete_user_group(resource, state),
+            )?,
+            PlanStep::UserShellNoop | PlanStep::SystemGroupNoop(_) | PlanStep::UserGroupNoop(_) => {
+            }
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
             | PlanStep::FontConflict { .. }
+            | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
             | PlanStep::CapabilityConflict { .. } => unreachable!(),
         }
@@ -227,7 +251,10 @@ fn plan_uses_sudo(plan: &[PlanStep]) -> bool {
             }
         },
         PlanStep::CommandCreate(resource) => shell_uses_sudo(&resource.apply),
-        PlanStep::UserGroupAdd(_) => true,
+        PlanStep::SystemGroupCreate(_)
+        | PlanStep::SystemGroupRemove(_)
+        | PlanStep::UserGroupAdd(_)
+        | PlanStep::UserGroupRemove(_) => true,
         _ => false,
     })
 }
@@ -346,7 +373,10 @@ fn is_apply_step(step: &PlanStep) -> bool {
             | PlanStep::FontUpdate(_)
             | PlanStep::FontRemove { .. }
             | PlanStep::UserShellUpdate { .. }
+            | PlanStep::SystemGroupCreate(_)
+            | PlanStep::SystemGroupRemove(_)
             | PlanStep::UserGroupAdd(_)
+            | PlanStep::UserGroupRemove(_)
             | PlanStep::CommandCreate(_)
     )
 }
@@ -371,7 +401,12 @@ fn step_id(step: &PlanStep) -> Option<String> {
         }
         PlanStep::SymlinkRemove { target, .. } => Some(format!("symlink:{}", target.display())),
         PlanStep::UserShellUpdate { resource, .. } => Some(format!("user-shell:{}", resource.name)),
-        PlanStep::UserGroupAdd(resource) => Some(format!("user-group:{}", resource.name)),
+        PlanStep::SystemGroupCreate(resource)
+        | PlanStep::SystemGroupRemove(resource)
+        | PlanStep::SystemGroupNoop(resource) => Some(group_id_for(resource)),
+        PlanStep::UserGroupAdd(resource)
+        | PlanStep::UserGroupRemove(resource)
+        | PlanStep::UserGroupNoop(resource) => Some(user_group_id_for(resource)),
         _ => None,
     }
 }
@@ -398,6 +433,8 @@ fn package_provides(resource: &PackageResource) -> Vec<String> {
 fn step_needs(step: &PlanStep) -> Vec<String> {
     match step {
         PlanStep::CommandCreate(resource) => resource.needs.clone(),
+        PlanStep::UserGroupAdd(resource) => vec![format!("group:{}", resource.name)],
+        PlanStep::SystemGroupRemove(resource) => vec![format!("user-group:{}", resource.name)],
         PlanStep::PackageCreate { resource, .. } | PlanStep::PackageRemove { resource, .. } => {
             provider_needs(&resource.provider)
         }
@@ -439,6 +476,14 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
                 .resources
                 .insert(font_id_for(resource), state_font(resource))
                 .is_none(),
+            PlanStep::SystemGroupNoop(resource) => state
+                .resources
+                .insert(group_id_for(resource), state_group(resource))
+                .is_none(),
+            PlanStep::UserGroupNoop(resource) => state
+                .resources
+                .insert(user_group_id_for(resource), state_user_group(resource))
+                .is_none(),
             _ => false,
         };
         if inserted {
@@ -456,8 +501,32 @@ fn update_shell(resource: &UserShellResource) -> Result<()> {
     apply_shell(resource)
 }
 
-fn add_group(resource: &UserGroupResource) -> Result<()> {
-    apply_group(resource)
+fn add_system_group(resource: &SystemGroupResource, state: &mut State) -> Result<()> {
+    create_group(resource)?;
+    state
+        .resources
+        .insert(group_id_for(resource), state_group(resource));
+    Ok(())
+}
+
+fn delete_system_group(resource: &SystemGroupResource, state: &mut State) -> Result<()> {
+    remove_group(resource)?;
+    state.resources.remove(&group_id_for(resource));
+    Ok(())
+}
+
+fn add_group(resource: &UserGroupResource, state: &mut State) -> Result<()> {
+    apply_group(resource)?;
+    state
+        .resources
+        .insert(user_group_id_for(resource), state_user_group(resource));
+    Ok(())
+}
+
+fn delete_user_group(resource: &UserGroupResource, state: &mut State) -> Result<()> {
+    remove_user_from_group(resource)?;
+    state.resources.remove(&user_group_id_for(resource));
+    Ok(())
 }
 
 fn install_font(resource: &FontResource, state: &mut State) -> Result<()> {

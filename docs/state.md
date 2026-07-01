@@ -28,6 +28,8 @@ symlink:/home/me/.zshrc
 package:paru:ripgrep
 service:systemd:start:docker.service
 font:/home/me/.local/share/fonts/dots/runcat.ttf
+group:media
+user-group:media
 ```
 
 ## Forget an entry
@@ -39,6 +41,7 @@ Use `forget` when something should stay on the machine but stop being managed by
 dots state forget symlink:/home/me/.zshrc
 dots state forget package:paru:ripgrep
 dots state forget service:systemd:start:docker.service
+dots state forget group:media
 ```
 
 This only edits state. It does not remove files, uninstall packages, or stop

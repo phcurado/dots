@@ -2,7 +2,7 @@
 
 # dots
 
-<p><img title="dots logo" src="https://raw.githubusercontent.com/phcurado/dots/main/logo.png" width="360" alt="dots logo"></p>
+<p><img title="dots logo" src="logo.png" width="360" alt="dots logo"></p>
 
 **Manage your dotfiles declaratively, without configuring each machine by hand**
 

@@ -1,11 +1,12 @@
 # User
 
-Some machine setup belongs to the user account. The common examples are the
-login shell and Linux group membership.
+Some setup belongs to the user account itself. The common examples are the login
+shell and Linux group membership.
 
 ```lua
 dots.user.shell("zsh")
-dots.user.groups({ "docker" })
+dots.group.create({ "docker" })
+dots.user.add_to_groups({ "docker" })
 ```
 
 These settings apply to the user running `dots`.
@@ -32,18 +33,41 @@ Restart the login session for the shell change to take effect.
 
 ## Groups
 
-Use `dots.user.groups(...)` for Linux groups:
+Groups and group membership are separate.
+
+Use `dots.group.create(...)` when the group itself should exist:
 
 ```lua
-dots.user.groups({ "docker" })
+dots.group.create({ "media" })
 ```
 
-If the current user is not in the group, the check shows an add. On apply,
-`dots` runs:
+On apply, missing groups are created with:
+
+```sh
+sudo groupadd media
+```
+
+Use `dots.user.add_to_groups(...)` when the current user should be a member of
+existing groups:
+
+```lua
+dots.user.add_to_groups({ "docker", "wheel", "media" })
+```
+
+On apply, `dots` runs:
 
 ```sh
 sudo usermod -aG docker "$USER"
 ```
+
+If a group is used in `dots.user.add_to_groups(...)` but does not exist and is
+not declared with `dots.group.create(...)`, `dots check` reports a conflict
+instead of creating it by accident.
+
+Groups declared with `dots.group.create(...)` are tracked when `dots check` or
+`dots apply` sees that they exist. If that declaration is removed later,
+`dots check` shows the group removal. Memberships declared with
+`dots.user.add_to_groups(...)` are tracked the same way.
 
 Group membership usually requires logging out and back in before it affects new
 sessions.

@@ -21,7 +21,8 @@ use crate::symlink::{
     stale_symlinks_for_declaration, state_symlink, symlink_id_for, symlink_matches,
 };
 use crate::user::{
-    UserGroupResource, UserShellResource, current_shell, group_exists, shell_matches,
+    SystemGroupResource, UserGroupResource, UserShellResource, current_shell, shell_matches,
+    system_group_exists, user_in_group,
 };
 
 #[derive(Debug, Clone)]
@@ -80,8 +81,16 @@ pub(crate) enum PlanStep {
         current: Option<PathBuf>,
     },
     UserShellNoop,
+    SystemGroupCreate(SystemGroupResource),
+    SystemGroupRemove(SystemGroupResource),
+    SystemGroupNoop(SystemGroupResource),
+    SystemGroupConflict {
+        resource: SystemGroupResource,
+        reason: String,
+    },
     UserGroupAdd(UserGroupResource),
-    UserGroupNoop,
+    UserGroupRemove(UserGroupResource),
+    UserGroupNoop(UserGroupResource),
     UserGroupConflict {
         resource: UserGroupResource,
         reason: String,
@@ -100,6 +109,24 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
             state
                 .resources
                 .insert(symlink_id_for(resource), state_symlink(resource));
+        }
+    }
+
+    if std::env::consts::OS == "linux" {
+        for resource in &config.user.groups {
+            if system_group_exists(&resource.name)? {
+                state
+                    .resources
+                    .insert(group_id_for(resource), state_group(resource));
+            }
+        }
+
+        for resource in &config.user.memberships {
+            if user_in_group(resource)? {
+                state
+                    .resources
+                    .insert(user_group_id_for(resource), state_user_group(resource));
+            }
         }
     }
 
@@ -274,7 +301,34 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    let declared_groups = config
+        .user
+        .groups
+        .iter()
+        .map(|resource| resource.name.clone())
+        .collect::<BTreeSet<_>>();
+
     for resource in &config.user.groups {
+        declared.insert(group_id_for(resource));
+        if std::env::consts::OS != "linux" {
+            plan.push(PlanStep::SystemGroupConflict {
+                resource: resource.clone(),
+                reason: "groups are only supported on Linux".to_string(),
+            });
+            continue;
+        }
+        if system_group_exists(&resource.name)? {
+            plan.push(PlanStep::SystemGroupNoop(resource.clone()));
+        } else {
+            plan.push(PlanStep::SystemGroupCreate(resource.clone()));
+        }
+    }
+
+    for resource in &config.user.memberships {
+        declared.insert(group_id_for(&SystemGroupResource {
+            name: resource.name.clone(),
+        }));
+        declared.insert(user_group_id_for(resource));
         if std::env::consts::OS != "linux" {
             plan.push(PlanStep::UserGroupConflict {
                 resource: resource.clone(),
@@ -282,8 +336,13 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             });
             continue;
         }
-        if group_exists(resource)? {
-            plan.push(PlanStep::UserGroupNoop);
+        if !declared_groups.contains(&resource.name) && !system_group_exists(&resource.name)? {
+            plan.push(PlanStep::UserGroupConflict {
+                resource: resource.clone(),
+                reason: "group does not exist".to_string(),
+            });
+        } else if user_in_group(resource)? {
+            plan.push(PlanStep::UserGroupNoop(resource.clone()));
         } else {
             plan.push(PlanStep::UserGroupAdd(resource.clone()));
         }
@@ -348,6 +407,16 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                         reason: format!("{provider} service provider is not configured"),
                     }),
                 }
+            }
+            StateResource::Group { name } => {
+                plan.push(PlanStep::SystemGroupRemove(SystemGroupResource {
+                    name: name.clone(),
+                }))
+            }
+            StateResource::UserGroup { name } => {
+                plan.push(PlanStep::UserGroupRemove(UserGroupResource {
+                    name: name.clone(),
+                }))
             }
         }
     }
@@ -423,6 +492,26 @@ pub(crate) fn state_service(resource: &ServiceResource) -> StateResource {
         action: resource.action.as_str().to_string(),
         name: resource.name.clone(),
     }
+}
+
+pub(crate) fn state_group(resource: &SystemGroupResource) -> StateResource {
+    StateResource::Group {
+        name: resource.name.clone(),
+    }
+}
+
+pub(crate) fn group_id_for(resource: &SystemGroupResource) -> String {
+    format!("group:{}", resource.name)
+}
+
+pub(crate) fn state_user_group(resource: &UserGroupResource) -> StateResource {
+    StateResource::UserGroup {
+        name: resource.name.clone(),
+    }
+}
+
+pub(crate) fn user_group_id_for(resource: &UserGroupResource) -> String {
+    format!("user-group:{}", resource.name)
 }
 
 pub(crate) fn service_id_for(resource: &ServiceResource) -> String {

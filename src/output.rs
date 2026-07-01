@@ -52,6 +52,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::PackageCreate { .. }
             | PlanStep::ServiceCreate { .. }
             | PlanStep::FontCreate(_)
+            | PlanStep::SystemGroupCreate(_)
             | PlanStep::UserGroupAdd(_)
             | PlanStep::CommandCreate(_) => summary.create += 1,
             PlanStep::SymlinkUpdate(_)
@@ -60,11 +61,14 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkRemove { .. }
             | PlanStep::PackageRemove { .. }
             | PlanStep::ServiceRemove { .. }
-            | PlanStep::FontRemove { .. } => summary.remove += 1,
+            | PlanStep::FontRemove { .. }
+            | PlanStep::SystemGroupRemove(_)
+            | PlanStep::UserGroupRemove(_) => summary.remove += 1,
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
             | PlanStep::FontConflict { .. }
+            | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
             | PlanStep::CapabilityConflict { .. } => summary.conflicts += 1,
             PlanStep::SymlinkNoop(_)
@@ -72,7 +76,8 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::ServiceNoop(_)
             | PlanStep::FontNoop(_)
             | PlanStep::UserShellNoop
-            | PlanStep::UserGroupNoop
+            | PlanStep::SystemGroupNoop(_)
+            | PlanStep::UserGroupNoop(_)
             | PlanStep::CommandNoop(_) => {}
         }
     }
@@ -264,11 +269,47 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
+    let has_groups = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::SystemGroupCreate(_)
+                | PlanStep::SystemGroupRemove(_)
+                | PlanStep::SystemGroupConflict { .. }
+        )
+    });
+    if has_groups {
+        if has_capabilities
+            || has_symlinks
+            || has_packages
+            || has_fonts
+            || has_commands
+            || has_services
+        {
+            println!();
+        }
+        println!("{}", bold("Groups:"));
+        for step in plan {
+            match step {
+                PlanStep::SystemGroupCreate(resource) => {
+                    println!("  {} group {}", green("+"), resource.name)
+                }
+                PlanStep::SystemGroupRemove(resource) => {
+                    println!("  {} group {}", red("-"), resource.name)
+                }
+                PlanStep::SystemGroupConflict { resource, reason } => {
+                    println!("  {} group {} ({reason})", red("!"), resource.name)
+                }
+                _ => {}
+            }
+        }
+    }
+
     let has_user = plan.iter().any(|step| {
         matches!(
             step,
             PlanStep::UserShellUpdate { .. }
                 | PlanStep::UserGroupAdd(_)
+                | PlanStep::UserGroupRemove(_)
                 | PlanStep::UserGroupConflict { .. }
         )
     });
@@ -279,6 +320,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_fonts
             || has_commands
             || has_services
+            || has_groups
         {
             println!();
         }
@@ -296,6 +338,9 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
                 ),
                 PlanStep::UserGroupAdd(resource) => {
                     println!("  {} group {}", green("+"), resource.name)
+                }
+                PlanStep::UserGroupRemove(resource) => {
+                    println!("  {} group {}", red("-"), resource.name)
                 }
                 PlanStep::UserGroupConflict { resource, reason } => {
                     println!("  {} group {} ({reason})", red("!"), resource.name)
@@ -350,6 +395,8 @@ pub(crate) fn print_state(project: &Project, state: &State) {
                 name,
             } => println!("  service {provider} {action} {name}"),
             StateResource::Font { target, .. } => println!("  font {}", display_target(target)),
+            StateResource::Group { name } => println!("  group {name}"),
+            StateResource::UserGroup { name } => println!("  user group {name}"),
         }
         println!("    {}", dim(id));
     }

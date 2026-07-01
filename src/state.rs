@@ -20,6 +20,10 @@ pub(crate) enum StateResource {
     },
     #[serde(rename = "font")]
     Font { source: PathBuf, target: PathBuf },
+    #[serde(rename = "group")]
+    Group { name: String },
+    #[serde(rename = "user-group")]
+    UserGroup { name: String },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

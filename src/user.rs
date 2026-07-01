@@ -8,13 +8,19 @@ use anyhow::{Context, Result, bail};
 #[derive(Debug, Default)]
 pub(crate) struct UserConfig {
     pub(crate) shell: Option<UserShellResource>,
-    pub(crate) groups: Vec<UserGroupResource>,
+    pub(crate) groups: Vec<SystemGroupResource>,
+    pub(crate) memberships: Vec<UserGroupResource>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct UserShellResource {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SystemGroupResource {
+    pub(crate) name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -122,8 +128,53 @@ pub(crate) fn current_groups() -> Result<BTreeSet<String>> {
         .collect())
 }
 
-pub(crate) fn group_exists(resource: &UserGroupResource) -> Result<bool> {
+pub(crate) fn user_in_group(resource: &UserGroupResource) -> Result<bool> {
     Ok(current_groups()?.contains(&resource.name))
+}
+
+pub(crate) fn system_group_exists(name: &str) -> Result<bool> {
+    let status = ProcessCommand::new("getent")
+        .arg("group")
+        .arg(name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| "failed to run getent")?;
+    Ok(status.success())
+}
+
+pub(crate) fn create_group(resource: &SystemGroupResource) -> Result<()> {
+    if std::env::consts::OS != "linux" {
+        bail!("groups are only supported on Linux");
+    }
+    let status = ProcessCommand::new("sudo")
+        .arg("groupadd")
+        .arg(&resource.name)
+        .status()
+        .with_context(|| "failed to run groupadd")?;
+    if !status.success() {
+        bail!("failed to create group {}", resource.name);
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_group(resource: &SystemGroupResource) -> Result<()> {
+    if std::env::consts::OS != "linux" {
+        bail!("groups are only supported on Linux");
+    }
+    if !system_group_exists(&resource.name)? {
+        return Ok(());
+    }
+    let status = ProcessCommand::new("sudo")
+        .arg("groupdel")
+        .arg(&resource.name)
+        .status()
+        .with_context(|| "failed to run groupdel")?;
+    if !status.success() {
+        bail!("failed to remove group {}", resource.name);
+    }
+    Ok(())
 }
 
 pub(crate) fn apply_group(resource: &UserGroupResource) -> Result<()> {
@@ -140,6 +191,27 @@ pub(crate) fn apply_group(resource: &UserGroupResource) -> Result<()> {
         .with_context(|| "failed to run usermod")?;
     if !status.success() {
         bail!("failed to add {user} to group {}", resource.name);
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_user_from_group(resource: &UserGroupResource) -> Result<()> {
+    if std::env::consts::OS != "linux" {
+        bail!("user groups are only supported on Linux");
+    }
+    if !user_in_group(resource)? {
+        return Ok(());
+    }
+    let user = current_user().context("could not determine current user")?;
+    let status = ProcessCommand::new("sudo")
+        .arg("gpasswd")
+        .arg("-d")
+        .arg(&user)
+        .arg(&resource.name)
+        .status()
+        .with_context(|| "failed to run gpasswd")?;
+    if !status.success() {
+        bail!("failed to remove {user} from group {}", resource.name);
     }
     Ok(())
 }

@@ -54,7 +54,8 @@ dots.pacman.install({ "base-devel", "git" })
 dots.paru.enable({ method = "pacman" })
 dots.paru.install({ "bat", "docker", "ripgrep" })
 
-dots.user.groups({ "docker" })
+dots.group.create({ "docker" })
+dots.user.add_to_groups({ "docker" })
 dots.systemd.enable({ "docker.service" })
 dots.systemd.start({ "docker.service" })
 ```
