@@ -6,6 +6,7 @@ export default defineConfig({
   base: "/dots/",
   themeConfig: {
     search: { provider: "local" },
+    socialLinks: [{ icon: "github", link: "https://github.com/phcurado/dots" }],
     sidebar: [
       {
         text: "Getting started",

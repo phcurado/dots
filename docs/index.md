@@ -1,7 +1,7 @@
 # dots
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/phcurado/dots/main/logo.png" alt="dots logo" width="320">
+  <img src="https://raw.githubusercontent.com/phcurado/dots/refs/heads/main/logo.png" alt="dots logo" width="320">
 </p>
 
 `dots` helps manage a dotfiles repo across different machines. It can create
