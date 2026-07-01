@@ -2,25 +2,25 @@
 
 # dots
 
+<p><img title="dots logo" src="logo.png" width="280" alt="dots logo"></p>
+
 **Manage your dotfiles declaratively, without configuring each machine by hand**
 
-**[Docs](docs/index.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
-**[Quick start](docs/quick-start.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
-**[Install](docs/install.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
-**[Symlinks](docs/symlinks.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
-**[Packages](docs/packages.md)**
+**[Docs](https://phcurado.github.io/dots/) &nbsp;&nbsp;•&nbsp;&nbsp;**
+**[Quick start](https://phcurado.github.io/dots/quick-start) &nbsp;&nbsp;•&nbsp;&nbsp;**
+**[Install](https://phcurado.github.io/dots/install) &nbsp;&nbsp;•&nbsp;&nbsp;**
+**[Release](https://github.com/phcurado/dots/releases)**
 
 </div>
 
 ## Introduction
 
-`dots` lets you run a dotfiles repo with a check/apply workflow. Describe the
-setup you want, inspect the diff with `dots check`, then apply it with
-`dots apply`.
+`dots` helps manage a dotfiles repo across machines. It can create symlinks,
+install OS packages, start services, copy fonts, and run checked setup commands.
 
-You can start small. Keep your current repo layout, move one thing at a time,
-and let `dots` manage only the parts you declare: symlinks, packages, services,
-fonts, user settings, and local state.
+You can use it with an existing repo or start from scratch. Keep your current
+layout, move one piece at a time, and let `dots` manage only the parts you add
+to `dots.lua`.
 
 ## Quick start
 
@@ -30,22 +30,22 @@ Install the latest release:
 curl -fsSL https://raw.githubusercontent.com/phcurado/dots/main/install.sh | sh
 ```
 
-Now create a dotfiles repo, or use the one you already have:
+Create a dotfiles repo, or use one you already have:
 
 ```sh
 dots init
 ```
 
-Add one file to `dots.lua`:
+Add a symlink to `dots.lua`:
 
 ```lua
 dots.symlink("~/.zshrc", ".zshrc")
 ```
 
-Check what would happen:
+Check the diff:
 
 ```sh
-dots check
+dots # or dots check
 ```
 
 On a fresh machine, the check shows a create:
@@ -57,7 +57,7 @@ Symlinks:
 Check: 1 to create, 0 to update, 0 to destroy.
 ```
 
-Add packages when you're ready:
+Add packages when you are ready:
 
 ```lua
 if dots.platform.family == "arch" then
@@ -71,7 +71,7 @@ if dots.platform.family == "darwin" then
 end
 ```
 
-If the check looks right, apply it:
+If the diff looks right, apply it:
 
 ```sh
 dots apply

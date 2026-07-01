@@ -1,8 +1,7 @@
 # Organizing a dotfiles repo
 
-A small repo can keep everything in `dots.lua`. If you prefer smaller files,
-you can separate the config into normal Lua modules and load them with
-`require()`.
+A small setup can live entirely in `dots.lua`. As the repo grows, split the
+config into normal Lua modules and load them with `require()`.
 
 ```lua
 require("dots.common")
@@ -16,22 +15,23 @@ if dots.platform.family == "darwin" then
 end
 ```
 
-That maps to this layout:
+One possible layout:
 
-```txt
-dots.lua
-dots/
-  common.lua
-  arch.lua
-  macos.lua
+```text
+dotfiles/
+  dots.lua
+  dots/
+    common.lua
+    arch.lua
+    macos.lua
 ```
 
 There is no `dots.load()` wrapper. `dots` adds the repo to Lua's module path, so
 plain Lua loading works.
 
-## Common module
+## Common config
 
-One common split is to put shared declarations in `dots/common.lua`:
+Put declarations shared by every machine in `dots/common.lua`:
 
 ```lua
 dots.user.shell("zsh")
@@ -42,12 +42,11 @@ dots.symlink("~/.gitconfig", ".gitconfig")
 dots.fonts.install()
 ```
 
-Use this module for declarations that apply to every machine: files, fonts,
-shell choice, and shared commands.
+This is a good place for shared files, fonts, shell settings, and commands.
 
-## Split by platform when the resource is platform-specific
+## Platform config
 
-Platform files are useful for package managers, services, or OS-only settings:
+Put OS-specific declarations in platform modules:
 
 ```lua
 -- dots/arch.lua
@@ -64,16 +63,16 @@ dots.systemd.start({ "docker.service" })
 -- dots/macos.lua
 dots.brew.enable()
 dots.brew.install({ "bat", "ripgrep" })
-dots.brew.cask({ "ghostty", "obsidian" })
+dots.brew.cask({ "ghostty", "firefox" })
 ```
 
-The top-level file stays small: it loads common declarations first, then loads
-platform-specific declarations for the current machine.
+The top-level `dots.lua` stays small: load common config first, then load the
+platform module for the current machine.
 
-## Profiles are for machines or personas
+## Profiles
 
-Use profiles when the OS is not enough. For example, two Arch machines may need
-different Git identities or window-manager config.
+Profiles are useful when the operating system is not enough. For example, the
+same machine might have a work profile and a personal profile.
 
 ```lua
 if dots.profile == "work" then
@@ -85,21 +84,22 @@ if dots.profile == "personal" then
 end
 ```
 
-A useful layout is:
+That maps to:
 
-```txt
-dots.lua
-dots/
-  common.lua
-  arch.lua
-  macos.lua
-  profiles/
-    work.lua
-    personal.lua
+```text
+dotfiles/
+  dots.lua
+  dots/
+    common.lua
+    arch.lua
+    macos.lua
+    profiles/
+      work.lua
+      personal.lua
 ```
 
 A practical split is:
 
 - `common.lua`: shared everywhere
-- `arch.lua`, `macos.lua`: platform-specific resources
-- `profiles/*.lua`: host, role, or persona-specific choices
+- `arch.lua`, `macos.lua`: OS-specific setup
+- `profiles/*.lua`: host, role, or profile-specific setup

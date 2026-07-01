@@ -1,9 +1,10 @@
 # Packages
 
-Packages are resources. `dots check` reports missing packages, and `dots apply`
-installs them with the selected package manager.
+A dotfiles setup often expects the same tools to exist on every machine: `git`,
+`ripgrep`, `bat`, `neovim`, and so on. `dots` can install those OS packages as
+part of the same config that manages the files.
 
-Package managers are available as namespaces:
+Choose the package manager by using its namespace:
 
 ```lua
 dots.pacman.install({ "base-devel", "git" })
@@ -14,7 +15,7 @@ dots.apt.install({ "bat", "ripgrep" })
 
 dots.brew.enable()
 dots.brew.install({ "bat", "ripgrep" })
-dots.brew.cask({ "ghostty" })
+dots.brew.cask({ "firefox" })
 ```
 
 The built-in providers are:
@@ -26,13 +27,14 @@ The built-in providers are:
 - `brew-cask`, exposed as `dots.brew.cask(...)`
 - `brew-tap`, exposed as `dots.brew.tap(...)`
 
-`dots.brew.enable()` can install Homebrew if it is missing. `dots.paru.enable({
-method = "pacman" })` declares `paru` through pacman and makes the `paru`
-provider available to later package declarations.
+`dots.brew.enable()` handles Homebrew when it is missing. `dots.paru.enable({
+method = "pacman" })` installs `paru` with pacman, so later `dots.paru.install`
+declarations can use it.
 
-## Choosing packages by platform
+## Platform-specific packages
 
-Use platform branches when package managers or package names differ:
+Different operating systems use different package managers. Sometimes the same
+tool also has a different package name. Keep that logic in Lua:
 
 ```lua
 local common_packages = { "bat", "ripgrep" }
@@ -46,17 +48,12 @@ end
 if dots.platform.family == "darwin" then
   dots.brew.enable()
   dots.brew.install(common_packages)
-  dots.brew.install({ "wget" })
   dots.brew.cask({ "firefox" })
 end
 ```
 
-On Linux, `dots.platform.family` comes from `/etc/os-release`. Arch gets
-`family = "arch"`; Debian and Ubuntu get `family = "debian"`.
-
-## When package names differ
-
-Some package names are not portable. Keep those declarations separate:
+Do not force everything into a shared table. If package names differ, keep them
+separate:
 
 ```lua
 if dots.platform.family == "arch" then
@@ -66,76 +63,40 @@ end
 if dots.platform.family == "debian" then
   dots.apt.install({ "fd-find" })
 end
-
-if dots.platform.family == "darwin" then
-  dots.brew.install({ "fd" })
-end
 ```
 
-## State
+On Linux, `dots.platform.family` comes from `/etc/os-release`. Arch uses
+`family = "arch"`; Debian and Ubuntu use `family = "debian"`; macOS uses
+`family = "darwin"`.
 
-Packages are tracked after `apply`, not after `check`.
+## Check and apply
 
-For example, if `ripgrep` is already installed and you add it to `dots.lua`, the
-first check still treats it as a declared resource that needs to be recorded. The
-apply step records it in state. This keeps one-off local installs from silently
-becoming part of the managed setup.
-
-## Check output
-
-A missing package looks like this:
+A missing package appears in the check output:
 
 ```diff
 Packages:
   + paru ripgrep
 ```
 
-If a managed package is removed from config, the check shows a destroy:
+If a managed package is removed from `dots.lua`, the check shows the remove:
 
 ```diff
 Packages:
   - paru ripgrep
 ```
 
-## Built-in providers
-
-The built-ins are Lua files under `src/lua/packages/`.
-
-For example, the Homebrew formula provider is registered like this:
-
-```lua
-dots.provider.package("brew", {
-  available = "command -v brew >/dev/null",
-  installed = 'brew list --formula "$DOTS_PACKAGE" >/dev/null 2>&1',
-  install = 'brew install "$DOTS_PACKAGE"',
-  remove = 'brew uninstall "$DOTS_PACKAGE"',
-})
-```
-
-Casks use a separate provider and a shorter helper:
-
-```lua
-dots.provider.package("brew-cask", {
-  available = "command -v brew >/dev/null",
-  installed = 'brew list --cask "$DOTS_PACKAGE" >/dev/null 2>&1',
-  install = 'brew install --cask "$DOTS_PACKAGE"',
-  remove = 'brew uninstall --cask "$DOTS_PACKAGE"',
-})
-
-dots.brew.cask = dots["brew-cask"].install
-```
-
-Provider commands run through `sh -c`. The package name is passed in the
-`DOTS_PACKAGE` environment variable.
-
-If a provider is missing, `dots check` reports it before listing the affected
-packages. Provider enable helpers can satisfy that requirement in the same
-apply. For example, `dots.paru.enable({ method = "pacman" })` declares `paru`
-through pacman, so later `dots.paru.install(...)` declarations can run after it.
+Packages are recorded in state after `dots apply`, not after `dots check`. If a
+package is already installed before `dots` manages it, apply records it without
+reinstalling it. This keeps random one-off installs from silently becoming part
+of the managed setup during check.
 
 ## Custom providers
 
-A simple provider can live in `dots.lua` or in a Lua module in the repo:
+Package providers are Lua definitions. A provider needs commands for checking
+whether the package manager exists, checking whether one package is installed,
+installing it, and removing it.
+
+For example, a small Cargo provider can live in `dots.lua` or in a Lua module:
 
 ```lua
 dots.provider.package("cargo", {
@@ -148,5 +109,8 @@ dots.provider.package("cargo", {
 dots.cargo.install({ "tree-sitter-cli" })
 ```
 
-If a package manager needs more logic, put that logic in a script and call the
-script from the provider command.
+Provider commands run through `sh -c`. The package name is available as
+`DOTS_PACKAGE`.
+
+If a package manager needs more logic than fits in one line, put the logic in a
+script and call the script from the provider command.

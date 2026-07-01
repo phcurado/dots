@@ -1,6 +1,6 @@
 # State
 
-`dots` stores local state in the dotfiles repo:
+`dots` keeps local state in the dotfiles repo:
 
 ```text
 .dots/state.json
@@ -8,11 +8,12 @@
 
 Do not commit this file. It belongs to one machine.
 
-The state file records what `dots` owns. That is how `dots` can remove a symlink,
-uninstall a package, stop a service, or remove a copied font after you delete the
-resource from config, without touching unrelated files.
+State is what lets `dots` remove things safely. If `dots` created a symlink,
+installed a package, started a service, or copied a font, it records that. If
+the declaration is later removed from `dots.lua`, `dots check` can show the
+matching remove without touching unrelated files.
 
-## List resources
+## List managed entries
 
 Run:
 
@@ -20,7 +21,7 @@ Run:
 dots state list
 ```
 
-You will see entries like:
+Example entries:
 
 ```text
 symlink:/home/me/.zshrc
@@ -29,7 +30,7 @@ service:systemd:start:docker.service
 font:/home/me/.local/share/fonts/dots/runcat.ttf
 ```
 
-## Forget a resource
+## Forget an entry
 
 Use `forget` when something should stay on the machine but stop being managed by
 `dots`:

@@ -1,31 +1,27 @@
 # dots
 
-`dots` is meant to be run from inside your dotfiles repo. The repo stays the
-source of truth: you describe the setup you want, check what would change, and
-only then apply it.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/phcurado/dots/main/logo.png" alt="dots logo" width="280">
+</p>
 
-```sh
-dots check
-dots apply
-```
+`dots` helps manage a dotfiles repo across different machines. It can create
+symlinks for config files, install OS packages, start services, copy fonts, and
+replace setup scripts with checked commands.
 
-Running `dots` with no command is the same as `dots check`.
-
-If you're trying `dots` on a repo you already use, start with `dots check`. It
-will show the diff without installing packages, starting services, copying fonts,
-or changing symlinks.
+Start with the quick start if you are trying `dots` for the first time. The
+other pages go deeper into each part of the config.
 
 ## Start here
 
-- [Quick start](quick-start.md): create a small config and run the first check.
-- [Install](install.md): install from a release or from source.
-- [Organization](organization.md): split a config with normal Lua modules.
-- [Platforms and profiles](platforms-and-profiles.md): share one repo across different machines.
-- [Symlinks](symlinks.md): put repo files where programs expect them.
-- [Packages](packages.md): install packages with `pacman`, `paru`, `apt`, or Homebrew.
-- [Commands](commands.md): manage checked setup commands and ordering.
-- [Services](services.md): start or enable systemd and Homebrew services.
-- [Fonts](fonts.md): keep fonts in the repo and install them for the current OS.
-- [User](user.md): set the login shell or add the current user to groups.
-- [State](state.md): inspect what `dots` owns, or stop tracking something.
+- [Quick start](quick-start.md): create a small setup with symlinks and packages.
+- [Install](install.md): install the `dots` binary.
+- [Symlinks](symlinks.md): link files from the repo into `$HOME`.
+- [Packages](packages.md): install OS packages with `pacman`, `paru`, `apt`, or Homebrew.
+- [Services](services.md): start and enable background services.
+- [Commands](commands.md): replace setup scripts with checked commands.
+- [Fonts](fonts.md): install fonts stored in the repo.
+- [User](user.md): set the login shell or Linux groups.
+- [Platforms and profiles](platforms-and-profiles.md): share one repo across operating systems, machines, or profiles.
+- [Organization](organization.md): split `dots.lua` into normal Lua modules.
+- [State](state.md): inspect or forget what `dots` manages.
 - [Release](release.md): publish a tagged GitHub release.

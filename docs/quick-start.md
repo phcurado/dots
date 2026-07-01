@@ -1,5 +1,14 @@
 # Quick start
 
+`dots` helps manage dotfiles declaratively across machines and environments. It
+can work with an existing dotfiles repo, or with a new setup from scratch. It
+can replace parts of a setup currently handled by Stow, package lists, service
+commands, or shell scripts.
+
+In this page we will create a small dotfiles setup. We will link a config file
+from your dotfiles repo into your home directory, then add OS packages that
+differ between Arch Linux and macOS.
+
 ## Install
 
 Install the latest release:
@@ -8,34 +17,58 @@ Install the latest release:
 curl -fsSL https://raw.githubusercontent.com/phcurado/dots/main/install.sh | sh
 ```
 
-From a local checkout of `dots`, use the Makefile instead:
+If you are working from a checkout of the `dots` source repo, install it with:
 
 ```sh
 make install
 ```
 
-## Start a config
+## Create a dotfiles repo
 
-From your dotfiles repo, initialize the local files that `dots` needs:
+Start in the repo that will hold your dotfiles:
+
+```sh
+mkdir dotfiles
+cd dotfiles
+```
+
+If you already have a dotfiles repo, use that directory instead.
+
+Initialize `dots` there:
 
 ```sh
 dots init
 ```
 
-This creates `dots.lua` if it does not exist and adds `.dots/` to `.gitignore`.
-The `.dots` directory holds local state for this machine, so it should not be
-committed.
+That creates `dots.lua`:
 
-Now declare one file:
+```text
+dotfiles/
+  dots.lua
+```
+
+`dots.lua` is the entrypoint of your dotfiles configuration. It describes what
+should exist on your machine.
+
+## Link a config file
+
+Some config files are worth tracking in a dotfiles repo so the same setup can
+be used across different computers. Programs still read those files from fixed
+paths in your home directory (`$HOME`), such as `~/.zshrc`, `~/.gitconfig`,
+`~/.config/nvim`, and so on.
+
+One of the first steps in managing dotfiles is creating symlinks from those
+system paths back to your repo. Then another machine can use the same references
+without copying files by hand.
+
+For a shell config stored as `.zshrc` in the repo, add this to `dots.lua`:
 
 ```lua
 dots.symlink("~/.zshrc", ".zshrc")
 ```
 
-The first path is where the file should appear in your home directory. The
-second path is the file in the repo.
-
-## Check first
+The first path is where the operating system expects the file. The second path
+is the file in your dotfiles repo.
 
 Run:
 
@@ -43,16 +76,8 @@ Run:
 dots check
 ```
 
-`dots check` only reads the system and prints what would change. It does not
-install packages, start services, copy fonts, or change symlinks.
-
-If `~/.zshrc` is already the right symlink, the output is quiet:
-
-```txt
-No changes.
-```
-
-On a fresh machine, the check shows a create:
+`dots check` reads the machine state declared in `dots.lua` and prints the diff.
+If `~/.zshrc` is not managed yet, it shows:
 
 ```diff
 Symlinks:
@@ -61,9 +86,16 @@ Symlinks:
 Check: 1 to create, 0 to update, 0 to destroy.
 ```
 
-## Add a package
+If the symlink already points to `.zshrc`, the output is:
 
-Add one package for your platform:
+```text
+No changes.
+```
+
+## Install packages
+
+The same config can also manage OS packages. If different machines use different
+package managers, keep that logic in Lua:
 
 ```lua
 if dots.platform.family == "arch" then
@@ -73,42 +105,38 @@ end
 
 if dots.platform.family == "darwin" then
   dots.brew.enable()
-  dots.brew.install({ "ripgrep" })
+  dots.brew.install({ "wget" })
 end
 ```
 
-Run another check:
-
-```sh
-dots check
-```
-
-If the package is missing, the check shows it:
+On Arch Linux, `dots check` shows the Arch package:
 
 ```diff
 Packages:
   + paru ripgrep
-
-Check: 1 to create, 0 to update, 0 to destroy.
 ```
 
-If it is already installed, there may be no visible change. `dots` does not
-install anything during check.
+On macOS, the same config shows the Homebrew package:
+
+```diff
+Packages:
+  + brew wget
+```
 
 ## Apply
 
-Apply the checked changes:
+After inspecting the diff, apply the configuration:
 
 ```sh
 dots apply
 ```
 
-`apply` prints the same check first and asks for confirmation:
+`dots apply` asks for confirmation before changing the machine:
 
-```txt
+```text
 Type 'yes' to apply these changes.
 Apply?
 ```
 
-After a successful apply, `dots` records managed resources in
-`.dots/state.json`.
+After applying, `dots` creates the symlink and installs the package for the
+current operating system.

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{Result, bail};
 
@@ -34,6 +35,8 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
         }
         return Ok(());
     }
+
+    prepare_sudo(plan)?;
 
     println!();
     println!("{}", bold("Applying:"));
@@ -182,6 +185,59 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn prepare_sudo(plan: &[PlanStep]) -> Result<()> {
+    if !plan_uses_sudo(plan) {
+        return Ok(());
+    }
+
+    println!();
+    println!("{}", bold("Authenticating sudo:"));
+    let status = ProcessCommand::new("sudo")
+        .arg("-v")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+    if !status.success() {
+        bail!("sudo authentication failed");
+    }
+    Ok(())
+}
+
+fn plan_uses_sudo(plan: &[PlanStep]) -> bool {
+    plan.iter().any(|step| match step {
+        PlanStep::PackageCreate { provider, .. } => shell_uses_sudo(&provider.install),
+        PlanStep::PackageRemove { provider, .. } => shell_uses_sudo(&provider.remove),
+        PlanStep::ServiceCreate { provider, resource } => match resource.action {
+            crate::service::ServiceAction::Start => {
+                provider.start.as_deref().is_some_and(shell_uses_sudo)
+            }
+            crate::service::ServiceAction::Enable => {
+                provider.enable.as_deref().is_some_and(shell_uses_sudo)
+            }
+        },
+        PlanStep::ServiceRemove { provider, resource } => match resource.action {
+            crate::service::ServiceAction::Start => {
+                provider.stop.as_deref().is_some_and(shell_uses_sudo)
+            }
+            crate::service::ServiceAction::Enable => {
+                provider.disable.as_deref().is_some_and(shell_uses_sudo)
+            }
+        },
+        PlanStep::CommandCreate(resource) => shell_uses_sudo(&resource.apply),
+        PlanStep::UserGroupAdd(_) => true,
+        _ => false,
+    })
+}
+
+fn shell_uses_sudo(command: &str) -> bool {
+    command
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, ';' | '&' | '|' | '(' | ')')
+        })
+        .any(|word| word == "sudo")
 }
 
 fn apply_order(plan: &[PlanStep]) -> Result<Vec<usize>> {

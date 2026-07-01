@@ -1,7 +1,10 @@
 # Commands
 
-Commands are resources backed by shell commands. Use them for setup work that
-`dots` does not model directly.
+Some setup steps are just shell commands: install a plugin manager, restore a
+secret from 1Password, build a small helper, or run a project-specific install
+script. Use `dots.command` for those steps.
+
+Each command has a `check` command and an `apply` command:
 
 ```lua
 dots.command("oh-my-zsh", {
@@ -12,27 +15,19 @@ dots.command("oh-my-zsh", {
 })
 ```
 
-`check` is run during `dots check`. Exit code 0 means the command is already
-applied. Any other exit code means it should be applied.
+`check` runs during `dots check`. Exit code 0 means the setup is already done.
+Any other exit code means the command needs to run.
 
-`apply` is run during `dots apply` when `check` fails. After `apply` finishes,
-`dots` runs `check` again and reports an error if it still fails.
+`apply` runs during `dots apply` when `check` fails. After it finishes, `dots`
+runs `check` again. If the check still fails, the apply fails.
 
-Commands do not have destroy behavior.
-
-A missing command is shown as:
-
-```diff
-Commands:
-  + oh-my-zsh
-```
+Commands do not have a remove action. If a setup step needs custom removal,
+keep that logic in a script and run it yourself.
 
 ## Ordering
 
-The `needs` field controls apply order. Entries in `needs` can be command
-references or strings.
-
-A command reference refers to the exact command returned by `dots.command(...)`:
+Commands can depend on other commands. `dots.command(...)` returns a reference
+that can be used in `needs`:
 
 ```lua
 local node = dots.command("node", {
@@ -47,9 +42,9 @@ dots.command("prettier", {
 })
 ```
 
-The command above installs `prettier` after the `node` command.
+This applies `node` before `prettier`.
 
-A string in `needs` is matched against strings in `provides`:
+Strings can also be used with `needs` and `provides`:
 
 ```lua
 dots.command("node", {
@@ -65,18 +60,19 @@ dots.command("prettier", {
 })
 ```
 
-Here, `prettier` needs `node`. Any resource that provides `node` can satisfy
-that dependency.
+Here, `prettier` needs a prerequisite named `node`. A command or package that
+provides `node` can satisfy it.
 
-Use command references when depending on a specific command. Use strings when
-the dependency is a named thing that may be provided by more than one resource.
+Use references when one command depends on another specific command. Use strings
+when the dependency is a named prerequisite that could be provided in more than
+one way.
 
-`dots` applies resources in dependency order. Dependency cycles are errors.
+Dependency cycles are errors.
 
 ## Provider helpers
 
-Package and service providers use the same ordering system. The helpers below
-make the provider available before resources that need it:
+Provider helpers use the same ordering system. They make a package or service
+provider available before other declarations use it:
 
 ```lua
 dots.brew.enable()
@@ -88,6 +84,6 @@ dots.paru.enable({ method = "pacman" })
 dots.paru.install({ "bat", "ripgrep" })
 ```
 
-`dots.brew.enable()` provides the Brew providers used by `dots.brew.*`.
-`dots.paru.enable({ method = "pacman" })` declares the `paru` pacman package,
-which provides the `paru` provider.
+`dots.brew.enable()` provides the Homebrew providers used by `dots.brew.*`.
+`dots.paru.enable({ method = "pacman" })` installs `paru` through pacman and
+provides the `paru` package provider.

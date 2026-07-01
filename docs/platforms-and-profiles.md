@@ -1,36 +1,30 @@
 # Platforms and profiles
 
-A single dotfiles repo can usually cover more than one machine. Most files may
-be shared, while package managers, services, or a few personal files vary by
-system.
+A single dotfiles repo can be used on different operating systems and in
+different modes. Arch and macOS use different package managers. Two machines may
+need different services. One laptop may have both a personal profile and a work
+profile.
 
-`dots` gives you two ways to branch the config:
+`dots` exposes platform facts while `dots.lua` runs. It also exposes
+`dots.profile`, which can be selected from the command line.
 
-- use platform facts for OS and distro decisions
-- use profiles for host or persona decisions
+## Platform facts
 
-For larger configs, keep the branching in small Lua modules. See
-[Organizing a dotfiles repo](organization.md).
-
-## Platform
-
-`dots.platform` is available while `dots.lua` is running:
+Use `dots.platform` for OS and distro decisions:
 
 ```lua
-if dots.platform.system == "x86_64-linux" then
-  -- Linux on x86_64
-end
-
 if dots.platform.family == "arch" then
+  dots.paru.enable({ method = "pacman" })
   dots.paru.install({ "bat", "ripgrep" })
 end
 
-if dots.platform.family == "debian" then
-  dots.apt.install({ "bat", "ripgrep" })
+if dots.platform.family == "darwin" then
+  dots.brew.enable()
+  dots.brew.install({ "bat", "ripgrep" })
 end
 ```
 
-The available fields are:
+Available fields:
 
 | Field                    | Example          |
 | ------------------------ | ---------------- |
@@ -41,17 +35,18 @@ The available fields are:
 | `dots.platform.family`   | `arch`, `debian` |
 | `dots.platform.hostname` | `thinkpad`       |
 
-`system` uses the same shape as Nix systems: `<arch>-<os>`. Examples include
-`x86_64-linux` and `aarch64-darwin`.
+`system` uses the Nix-style shape `<arch>-<os>`, such as `x86_64-linux` or
+`aarch64-darwin`.
 
-On Linux, `distro` and `family` come from `/etc/os-release`. Ubuntu and Debian
-both use `family = "debian"`; Arch uses `family = "arch"`. macOS uses
+On Linux, `distro` and `family` come from `/etc/os-release`. Arch uses
+`family = "arch"`; Debian and Ubuntu use `family = "debian"`; macOS uses
 `family = "darwin"`.
 
 ## Profiles
 
-Use profiles when the OS is not enough. For example, two Linux machines might
-share packages but use different Git identities.
+Use profiles for choices that are not determined by the operating system. For
+example, the same laptop can use a work Git config during the day and a personal
+Git config outside work:
 
 ```lua
 if dots.profile == "work" then
@@ -63,17 +58,25 @@ if dots.profile == "personal" then
 end
 ```
 
-Pass a profile on the command line:
+Select a profile on the command line:
 
 ```sh
 dots --profile work check
 dots --profile work apply
 ```
 
-You can also set an environment variable:
+Or with an environment variable:
 
 ```sh
 DOTS_PROFILE=work dots check
 ```
 
-If neither is set, `dots.profile` defaults to the hostname.
+If no profile is selected, `dots.profile` defaults to the hostname.
+
+Profiles can also control services:
+
+```lua
+if dots.profile == "work" then
+  dots.systemd.start({ "example-vpn.service" })
+end
+```

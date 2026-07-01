@@ -1,10 +1,7 @@
 # User
 
-Some setup belongs to the user account itself. For example, you may want `zsh`
-as the login shell, or you may need to be in the `docker` group after installing
-Docker.
-
-Declare those settings with `dots.user`:
+Some machine setup belongs to the user account. The common examples are the
+login shell and Linux group membership.
 
 ```lua
 dots.user.shell("zsh")
@@ -21,7 +18,7 @@ Use `dots.user.shell(...)` to set the login shell:
 dots.user.shell("zsh")
 ```
 
-`dots` resolves the shell with `PATH`, so `"zsh"` becomes something like
+`dots` resolves the shell from `PATH`, so `"zsh"` becomes a full path such as
 `/usr/bin/zsh`. If the current login shell already matches, the check has no
 change.
 
@@ -31,7 +28,7 @@ On apply, `dots` runs:
 chsh -s <shell-path>
 ```
 
-You may need to log out and back in before the new shell is used by terminals.
+Restart the login session for the shell change to take effect.
 
 ## Groups
 

@@ -1,50 +1,53 @@
 # Symlinks
 
-Programs usually look for config files in fixed places: `~/.zshrc`,
-`~/.gitconfig`, `~/.config/nvim`, and so on. A dotfiles repo keeps those files
-in one checkout. Symlinks connect the checkout to the paths programs already
-use.
+Programs read config from fixed paths in your home directory, such as
+`~/.zshrc`, `~/.gitconfig`, or `~/.config/nvim`. A dotfiles repo keeps those
+files together. Symlinks connect the paths programs use back to the files in the
+repo.
 
-A symlink is declared with `dots.symlink(target, source)`:
+Use `dots.symlink(target, source)`:
 
 ```lua
-dots.symlink("~/.config/nvim", ".config/nvim")
 dots.symlink("~/.zshrc", ".zshrc")
+dots.symlink("~/.config/nvim", ".config/nvim")
 ```
 
-The first path is where the link should be created. The second path points to
-the file or directory in the repo.
+The first path is where the program expects the file. The second path is the
+file or directory in the repo.
 
-```text
-~/.config/nvim -> <repo>/.config/nvim
-~/.zshrc       -> <repo>/.zshrc
-```
-
-Relative source paths are resolved from the directory that contains `dots.lua`.
-That means the config still works if you clone the repo somewhere else.
+Relative source paths are resolved from the directory containing `dots.lua`, so
+the config still works if the repo is cloned somewhere else.
 
 ## Files and directories
 
-A directory can be linked as one unit:
-
-```lua
-dots.symlink("~/.config/nvim", ".config/nvim")
-```
-
-A file can also be linked directly:
+A single file can be linked directly:
 
 ```lua
 dots.symlink("~/.gitconfig", ".gitconfig")
 dots.symlink("~/.config/starship.toml", ".config/starship.toml")
 ```
 
-Use whichever shape matches the repo. `dots` does not require a special folder
-layout.
+A directory can also be linked:
 
-## Repos that mirror `$HOME`
+```lua
+dots.symlink("~/.config/nvim", ".config/nvim")
+```
 
-Some dotfiles repos are laid out like a home directory. In that case, you can
-point `~` at the repo root:
+Use the shape that matches your repo. `dots` does not require a special layout.
+
+## Home-shaped repos
+
+Some dotfiles repos mirror `$HOME`:
+
+```text
+dotfiles/
+  .zshrc
+  .gitconfig
+  .config/
+    nvim/
+```
+
+For that layout, you can point `~` at the repo root:
 
 ```lua
 dots.symlink("~", ".", {
@@ -52,65 +55,49 @@ dots.symlink("~", ".", {
     ".git/**",
     ".jj/**",
     ".dots/**",
-    "target/**",
     "README.md",
   },
 })
 ```
 
-The `ignore` list keeps repo-only files from being linked into your home
-directory.
+The `ignore` list keeps repo-only files from being linked into `$HOME`.
 
-`dots` also avoids replacing existing directories. If `~/.config` already exists
-and the repo contains `.config/nvim`, `dots` creates this link:
-
-```text
-~/.config/nvim -> <repo>/.config/nvim
-```
-
-It does not replace the whole `~/.config` directory.
+If the target directory already exists, `dots` links the children instead of
+replacing the directory. For example, if `~/.config` exists and the repo has
+`.config/nvim`, `dots` creates the link at `~/.config/nvim`.
 
 ## Conflicts
 
-`dots` is conservative with existing files.
+`dots` does not adopt arbitrary files.
 
-If a regular file already exists at the target and has the same contents as the
-repo file, `dots` can replace it with the symlink during apply:
+If the target already exists and has the same contents as the repo file, `dots`
+can replace it with a symlink:
 
 ```diff
 Symlinks:
   ~ symlink ~/.zshrc -> .zshrc
 ```
 
-If the existing file is different, or the target is a directory that cannot be
-expanded safely, the check shows a conflict:
+If the target is different, the check reports a conflict:
 
 ```diff
 Symlinks:
   ! symlink ~/.zshrc (target exists and is not a symlink)
 ```
 
-To fix this, you can move or copy the file to the correct path, then run `dots check` again.
+Move the file out of the way, or copy the contents into the repo, then run
+`dots check` again.
 
-## Check output
+## Removing links
 
-A new link looks like this:
-
-```diff
-Symlinks:
-  + symlink ~/.zshrc -> .zshrc
-```
-
-If a managed link points somewhere else, the check shows an update:
-
-```diff
-Symlinks:
-  ~ symlink ~/.zshrc -> .zshrc
-```
-
-If you remove a link from config, the check shows a destroy:
+If a link was managed by `dots` and is removed from `dots.lua`, the next check
+shows a destroy:
 
 ```diff
 Symlinks:
   - symlink ~/.zshrc
 ```
+
+For directory-style declarations, stale cleanup is conservative: `dots` only
+removes symlinks that point back into the repo. Regular files created by
+applications are left alone.
