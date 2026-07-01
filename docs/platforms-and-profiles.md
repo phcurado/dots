@@ -14,8 +14,8 @@ Use `dots.platform` for OS and distro decisions:
 
 ```lua
 if dots.platform.family == "arch" then
-  dots.paru.enable({ method = "pacman" })
-  dots.paru.install({ "bat", "ripgrep" })
+  dots.yay.enable({ method = "aur" })
+  dots.yay.install({ "bat", "ripgrep" })
 end
 
 if dots.platform.family == "darwin" then

@@ -45,7 +45,7 @@ fn check_prints_symlink_and_package_changes() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Initializing state: .dots/state.json"));
+    assert!(stdout.contains("Created local state: .dots/state.json"));
     assert!(stdout.contains("+ symlink ~/.zshrc -> .zshrc"));
     assert!(stdout.contains("+ fake bat"));
     assert!(stdout.contains("Check: 2 to create, 0 to update, 0 to destroy."));
@@ -124,6 +124,9 @@ fn default_command_without_config_fails_without_prompt_when_not_interactive() {
 
     assert!(!output.status.success());
     assert!(!root.join("dots.lua").exists());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("No dots project found."));
+    assert!(stderr.contains("Run `dots init` to start."));
 }
 
 #[test]

@@ -80,10 +80,15 @@ dots.brew.install({ "bat", "ripgrep" })
 ```
 
 ```lua
+dots.yay.enable({ method = "aur" })
+dots.yay.install({ "bat", "ripgrep" })
+```
+
+```lua
 dots.paru.enable({ method = "pacman" })
 dots.paru.install({ "bat", "ripgrep" })
 ```
 
 `dots.brew.enable()` provides the Homebrew providers used by `dots.brew.*`.
-`dots.paru.enable({ method = "pacman" })` installs `paru` through pacman and
-provides the `paru` package provider.
+`dots.yay.enable({ method = "aur" })` builds `yay` from the AUR and provides the
+`yay` package provider. `dots.paru.enable(...)` does the same for `paru`.

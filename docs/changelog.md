@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1
+
+`0.3.1` smooths out first-run behavior and fixes state refresh for resources
+that already match the machine.
+
+### Added
+
+- `yay` package provider and `dots.yay.enable(...)`.
+- Broader starter config from `dots init`, including Arch, Debian/Ubuntu, macOS,
+  services, fonts, and profiles.
+- GitHub link in the documentation navbar.
+
+### Changed
+
+- `dots`, `dots check`, and `dots apply` now report a missing project and point
+  to `dots init` instead of opening an init prompt.
+- `dots init` has quieter output and a cleaner starter `dots.lua`.
+- `dots check` now records declared packages, services, and fonts that already
+  match the machine, not just symlinks and groups.
+- The logo now has a transparent background.
+
 ## 0.3.0
 
 `0.3.0` makes groups explicit and cleans up the release/docs setup.

@@ -8,6 +8,9 @@ Choose the package manager by using its namespace:
 
 ```lua
 dots.pacman.install({ "base-devel", "git" })
+dots.yay.enable({ method = "aur" })
+dots.yay.install({ "bat", "ripgrep" })
+
 dots.paru.enable({ method = "pacman" })
 dots.paru.install({ "bat", "ripgrep" })
 
@@ -21,15 +24,17 @@ dots.brew.cask({ "firefox" })
 The built-in providers are:
 
 - `pacman`
+- `yay`
 - `paru`
 - `apt`
 - `brew`
 - `brew-cask`, exposed as `dots.brew.cask(...)`
 - `brew-tap`, exposed as `dots.brew.tap(...)`
 
-`dots.brew.enable()` handles Homebrew when it is missing. `dots.paru.enable({
-method = "pacman" })` installs `paru` with pacman, so later `dots.paru.install`
-declarations can use it.
+`dots.brew.enable()` handles Homebrew when it is missing. `dots.yay.enable({
+method = "aur" })` builds `yay` from the AUR, so later `dots.yay.install`
+declarations can use it. `dots.paru.enable(...)` is available too if you prefer
+`paru`.
 
 ## Platform-specific packages
 
@@ -41,8 +46,8 @@ local common_packages = { "bat", "ripgrep" }
 
 if dots.platform.family == "arch" then
   dots.pacman.install({ "base-devel", "git" })
-  dots.paru.enable({ method = "pacman" })
-  dots.paru.install(common_packages)
+  dots.yay.enable({ method = "aur" })
+  dots.yay.install(common_packages)
 end
 
 if dots.platform.family == "darwin" then
@@ -57,7 +62,7 @@ separate:
 
 ```lua
 if dots.platform.family == "arch" then
-  dots.paru.install({ "fd" })
+  dots.yay.install({ "fd" })
 end
 
 if dots.platform.family == "debian" then
@@ -75,20 +80,19 @@ A missing package appears in the check output:
 
 ```diff
 Packages:
-  + paru ripgrep
+  + yay ripgrep
 ```
 
 If a managed package is removed from `dots.lua`, the check shows the remove:
 
 ```diff
 Packages:
-  - paru ripgrep
+  - yay ripgrep
 ```
 
-Packages are recorded in state after `dots apply`, not after `dots check`. If a
-package is already installed before `dots` manages it, apply records it without
-reinstalling it. This keeps random one-off installs from silently becoming part
-of the managed setup during check.
+Packages declared in `dots.lua` are recorded in state when `dots check` or
+`dots apply` sees that they are installed. If the declaration is later removed,
+`dots check` can show the package removal.
 
 ## Custom providers
 

@@ -405,7 +405,7 @@ pub(crate) fn print_state(project: &Project, state: &State) {
 pub(crate) fn print_state_initialized(project: &Project, state_path: &Path) {
     println!(
         "{} {}",
-        dim("Initializing state:"),
+        dim("Created local state:"),
         dim(&display_source(project, state_path))
     );
     println!();

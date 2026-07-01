@@ -400,6 +400,7 @@ fn load_builtin_lua(lua: &Lua) -> Result<()> {
             include_str!("lua/packages/pacman.lua"),
         ),
         ("dots package paru", include_str!("lua/packages/paru.lua")),
+        ("dots package yay", include_str!("lua/packages/yay.lua")),
         ("dots package apt", include_str!("lua/packages/apt.lua")),
         ("dots package brew", include_str!("lua/packages/brew.lua")),
         (
@@ -681,6 +682,18 @@ mod tests {
         assert_eq!(config.packages.len(), 1);
         assert_eq!(config.packages[0].provider, "paru");
         assert_eq!(config.packages[0].name, "bat");
+    }
+
+    #[test]
+    fn loads_yay_packages() {
+        let project = temp_project(r#"dots.yay.install({ "fd" })"#);
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(config.package_providers.contains_key("yay"));
+        assert_eq!(config.packages.len(), 1);
+        assert_eq!(config.packages[0].provider, "yay");
+        assert_eq!(config.packages[0].name, "fd");
     }
 
     #[test]

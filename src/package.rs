@@ -76,7 +76,7 @@ fn populate_provider_cache(cache: &mut PackageStatusCache, provider: &str) -> Re
 
 fn list_installed_packages(provider: &str) -> Result<Option<BTreeSet<String>>> {
     let command = match provider {
-        "pacman" | "paru" => "pacman -Qq",
+        "pacman" | "paru" | "yay" => "pacman -Qq",
         "apt" => "dpkg-query -W -f='${binary:Package}\\n'",
         "brew-tap" => "brew tap",
         _ => return Ok(None),

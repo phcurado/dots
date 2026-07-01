@@ -24,7 +24,7 @@ use platform::selected_profile;
 use project::{Project, find_project};
 use state::{State, load_state, save_state};
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use symlink::expand_home;
 
@@ -69,7 +69,6 @@ enum StateCommand {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let default_check = cli.command.is_none();
     let command = cli.command.unwrap_or(Command::Check);
 
     if matches!(command, Command::Init) {
@@ -77,11 +76,13 @@ fn main() -> Result<()> {
     }
 
     let profile = selected_profile(cli.profile.as_deref())?;
-    let project = if default_check && cli.file.is_none() {
-        find_project_or_offer_init()?
-    } else {
-        find_project(cli.file)?
-    };
+    let project = find_project(cli.file).map_err(|error| {
+        if error.to_string() == "could not find dots.lua" {
+            anyhow::anyhow!("No dots project found.\n\nRun `dots init` to start.")
+        } else {
+            error
+        }
+    })?;
     let state_path = project.root.join(".dots/state.json");
     let state_exists = state_path.exists();
     let mut state = load_state(&state_path)?;
@@ -123,33 +124,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn find_project_or_offer_init() -> Result<Project> {
-    match find_project(None) {
-        Ok(project) => Ok(project),
-        Err(error) if error.to_string() == "could not find dots.lua" => {
-            if !confirm_init()? {
-                return Err(error);
-            }
-            init_project(None)?;
-            find_project(None)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn confirm_init() -> Result<bool> {
-    if !io::stdin().is_terminal() {
-        return Ok(false);
-    }
-
-    print!("Initialize dots in this folder? [y/N] ");
-    io::stdout().flush()?;
-
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES"))
-}
-
 fn init_project(file: Option<&Path>) -> Result<()> {
     let config = match file {
         Some(path) => path.to_path_buf(),
@@ -157,11 +131,12 @@ fn init_project(file: Option<&Path>) -> Result<()> {
     };
     let root = config.parent().context("config path has no parent")?;
     let mut changed = false;
+    let mut created_config = false;
 
     if !config.exists() {
         fs::write(&config, starter_config())?;
-        println!("{} {}", bold("Created:"), config.display());
         changed = true;
+        created_config = true;
     }
 
     let gitignore = root.join(".gitignore");
@@ -172,11 +147,16 @@ fn init_project(file: Option<&Path>) -> Result<()> {
         }
         ignored.push_str(".dots/\n");
         fs::write(&gitignore, ignored)?;
-        println!("{} {}", bold("Updated:"), gitignore.display());
         changed = true;
     }
 
-    if !changed {
+    if created_config {
+        println!("{}", bold("Initialized dots project."));
+        println!();
+        println!("See dots.lua for examples. When you add something, run `dots check`.");
+    } else if changed {
+        println!("{}", bold("Initialized dots project."));
+    } else {
         println!("{}", bold("Already initialized."));
     }
 
@@ -184,16 +164,48 @@ fn init_project(file: Option<&Path>) -> Result<()> {
 }
 
 fn starter_config() -> &'static str {
-    r#"-- Start with one file, run `dots check`, then add more.
--- dots.symlink("~/.zshrc", ".zshrc")
+    r#"-- dots.lua
+-- Docs: https://phcurado.github.io/dots/
 
+local packages = { "bat", "ripgrep" }
+
+---- Files
+-- The source path is relative to this repo and must exist.
+-- dots.symlink("~/.zshrc", ".zshrc")
+-- dots.fonts.install()
+
+---- Arch Linux
 -- if dots.platform.family == "arch" then
--- 	dots.pacman.install({ "base-devel", "git", "paru" })
--- 	dots.paru.install({ "bat", "ripgrep" })
+-- 	dots.pacman.install({ "base-devel", "git" })
+--
+-- 	-- AUR helper: yay.
+-- 	dots.yay.enable({ method = "aur" })
+-- 	dots.yay.install(packages)
+--
+-- 	-- Alternative: paru.
+-- 	-- dots.paru.enable({ method = "pacman" })
+-- 	-- dots.paru.install(packages)
+--
+-- 	dots.systemd.enable({ "docker.service" })
+-- 	dots.systemd.start({ "docker.service" })
 -- end
 
+---- Debian / Ubuntu
+-- if dots.platform.family == "debian" then
+-- 	dots.apt.install(packages)
+-- end
+
+---- macOS
 -- if dots.platform.family == "darwin" then
--- 	dots.brew.install({ "bat", "ripgrep" })
+-- 	dots.brew.enable()
+-- 	dots.brew.install(packages)
+-- 	dots.brew.cask({ "firefox" })
+-- 	dots.brew.service.start({ "sketchybar" })
+-- end
+
+---- Profiles
+-- if dots.profile == "work" then
+-- 	dots.symlink("~/.gitconfig", "profiles/work/gitconfig")
 -- end
 "#
 }
@@ -243,6 +255,8 @@ fn state_key_from_arg(resource: &str) -> String {
         || resource.starts_with("package:")
         || resource.starts_with("service:")
         || resource.starts_with("font:")
+        || resource.starts_with("group:")
+        || resource.starts_with("user-group:")
     {
         resource.to_string()
     } else {

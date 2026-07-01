@@ -99,8 +99,8 @@ package managers, keep that logic in Lua:
 
 ```lua
 if dots.platform.family == "arch" then
-  dots.paru.enable({ method = "pacman" })
-  dots.paru.install({ "ripgrep" })
+  dots.yay.enable({ method = "aur" })
+  dots.yay.install({ "ripgrep" })
 end
 
 if dots.platform.family == "darwin" then
@@ -113,7 +113,7 @@ On Arch Linux, `dots check` shows the Arch package:
 
 ```diff
 Packages:
-  + paru ripgrep
+  + yay ripgrep
 ```
 
 On macOS, the same config shows the Homebrew package:

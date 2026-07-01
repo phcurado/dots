@@ -51,8 +51,8 @@ Put OS-specific declarations in platform modules:
 ```lua
 -- dots/arch.lua
 dots.pacman.install({ "base-devel", "git" })
-dots.paru.enable({ method = "pacman" })
-dots.paru.install({ "bat", "docker", "ripgrep" })
+dots.yay.enable({ method = "aur" })
+dots.yay.install({ "bat", "docker", "ripgrep" })
 
 dots.group.create({ "docker" })
 dots.user.add_to_groups({ "docker" })

@@ -1,12 +1,10 @@
 # User
 
-Some setup belongs to the user account itself. The common examples are the login
-shell and Linux group membership.
+Some setup belongs to the user account itself. The common example is the login
+shell.
 
 ```lua
 dots.user.shell("zsh")
-dots.group.create({ "docker" })
-dots.user.add_to_groups({ "docker" })
 ```
 
 These settings apply to the user running `dots`.
@@ -31,7 +29,11 @@ chsh -s <shell-path>
 
 Restart the login session for the shell change to take effect.
 
-## Groups
+## Groups on Linux
+
+Group management is Linux-only for now. On macOS, `dots.group.create(...)` and
+`dots.user.add_to_groups(...)` report a conflict instead of trying to guess the
+right `dscl` or Directory Services behavior.
 
 Groups and group membership are separate.
 

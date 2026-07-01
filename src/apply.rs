@@ -426,6 +426,7 @@ fn step_provides(step: &PlanStep) -> Vec<String> {
 fn package_provides(resource: &PackageResource) -> Vec<String> {
     match (resource.provider.as_str(), resource.name.as_str()) {
         ("pacman", "paru") => vec!["provider:paru".to_string()],
+        ("pacman", "yay") => vec!["provider:yay".to_string()],
         _ => Vec::new(),
     }
 }
@@ -449,6 +450,7 @@ fn provider_needs(provider: &str) -> Vec<String> {
     match provider {
         "brew" | "brew-cask" | "brew-tap" | "brew-service" => vec!["provider:brew".to_string()],
         "paru" => vec!["provider:paru".to_string()],
+        "yay" => vec!["provider:yay".to_string()],
         "pacman" => vec!["provider:pacman".to_string()],
         "apt" => vec!["provider:apt".to_string()],
         "systemd" => vec!["provider:systemd".to_string()],

@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::command::{CommandResource, command_current};
 use crate::config::Config;
-use crate::font::{FontResource, font_matches};
+use crate::font::{FontResource, font_matches, state_font};
 use crate::package::{
     PackageProvider, PackageResource, PackageStatusCache, package_installed_cached,
     package_provider_available,
@@ -109,6 +109,43 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
             state
                 .resources
                 .insert(symlink_id_for(resource), state_symlink(resource));
+        }
+    }
+
+    let mut package_status = PackageStatusCache::default();
+    for resource in &config.packages {
+        let Some(provider) = config.package_providers.get(&resource.provider) else {
+            continue;
+        };
+        if package_provider_available(provider)?
+            && package_installed_cached(&mut package_status, provider, resource)?
+        {
+            state
+                .resources
+                .insert(package_id_for(resource), state_package(resource));
+        }
+    }
+
+    let mut service_status = ServiceStatusCache::default();
+    for resource in &config.services {
+        let Some(provider) = config.service_providers.get(&resource.provider) else {
+            continue;
+        };
+        let capability = provider_capability(&resource.provider);
+        if capability_available(&capability)?
+            && service_current_cached(&mut service_status, provider, resource)?
+        {
+            state
+                .resources
+                .insert(service_id_for(resource), state_service(resource));
+        }
+    }
+
+    for resource in &config.fonts {
+        if font_matches(resource)? {
+            state
+                .resources
+                .insert(font_id_for(resource), state_font(resource));
         }
     }
 
@@ -441,6 +478,7 @@ fn plan_commands(commands: &[CommandResource]) -> Result<(Vec<PlanStep>, BTreeSe
 fn package_provides(resource: &PackageResource) -> Vec<String> {
     match (resource.provider.as_str(), resource.name.as_str()) {
         ("pacman", "paru") => vec!["provider:paru".to_string()],
+        ("pacman", "yay") => vec!["provider:yay".to_string()],
         _ => Vec::new(),
     }
 }
@@ -586,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_packages_are_not_auto_tracked_by_refresh() {
+    fn installed_packages_are_tracked_by_refresh_when_declared() {
         let mut config = Config::default();
         config
             .package_providers
@@ -600,7 +638,7 @@ mod tests {
         refresh_state_from_system(&config, &mut state).unwrap();
         let plan = build_plan(&config, &state).unwrap();
 
-        assert!(state.resources.is_empty());
+        assert!(state.resources.contains_key("package:fake:bat"));
         assert!(matches!(plan.as_slice(), [PlanStep::PackageNoop(_)]));
     }
 

@@ -16,7 +16,7 @@ other pages go deeper into each part of the config.
 - [Quick start](quick-start.md): create a small setup with symlinks and packages.
 - [Install](install.md): install the `dots` binary.
 - [Symlinks](symlinks.md): link files from the repo into `$HOME`.
-- [Packages](packages.md): install OS packages with `pacman`, `paru`, `apt`, or Homebrew.
+- [Packages](packages.md): install OS packages with `pacman`, `yay`, `paru`, `apt`, or Homebrew.
 - [Services](services.md): start and enable background services.
 - [Commands](commands.md): replace setup scripts with checked commands.
 - [Fonts](fonts.md): install fonts stored in the repo.
