@@ -5,7 +5,6 @@ export default defineConfig({
   description: "Declarative dotfiles across machines and environments",
   base: "/dots/",
   themeConfig: {
-    logo: "https://raw.githubusercontent.com/phcurado/dots/main/logo.png",
     search: { provider: "local" },
     sidebar: [
       {
