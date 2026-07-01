@@ -4,7 +4,7 @@
 
 <p><img title="dots logo" src="logo.png" width="360" alt="dots logo"></p>
 
-**Manage your dotfiles declaratively, without configuring each machine by hand**
+**Manage dotfiles declaratively and reuse your setup across machines**
 
 **[Docs](https://phcurado.github.io/dots/) &nbsp;&nbsp;•&nbsp;&nbsp;**
 **[Quick start](https://phcurado.github.io/dots/quick-start) &nbsp;&nbsp;•&nbsp;&nbsp;**
@@ -16,12 +16,12 @@
 
 ## Introduction
 
-`dots` helps manage a dotfiles repo across machines. It can create symlinks,
-install OS packages, start services, copy fonts, and run checked setup commands.
+`dots` helps you manage machine configuration. Create symlinks, install
+packages, start and enable services, install fonts, and run commands in a
+declarative way.
 
-You can use it with an existing repo or start from scratch. Keep your current
-layout, move one piece at a time, and let `dots` manage only the parts you add
-to `dots.lua`.
+Use it for your computers, dotfiles, or servers. Declare the setup once and reuse
+it across your machines.
 
 ## Quick start
 
@@ -37,46 +37,63 @@ Create a dotfiles repo, or use one you already have:
 dots init
 ```
 
-Add a symlink to `dots.lua`:
+The command above creates the `dots.lua` file, which main entrypoint for your configuration.
+You can manage symlinks, packages, services, and more:
 
 ```lua
+local packages = { "bat", "ripgrep" }
+
 dots.symlink("~/.zshrc", ".zshrc")
+
+if dots.platform.family == "arch" then
+  dots.pacman.install({ "base-devel", "git" })
+  dots.yay.enable({ method = "aur" })
+  dots.yay.install(packages)
+  dots.systemd.enable({ "docker.service" })
+  dots.systemd.start({ "docker.service" })
+end
+
+if dots.platform.family == "darwin" then
+  dots.brew.enable()
+  dots.brew.install(packages)
+  dots.brew.cask({ "firefox" })
+end
 ```
 
-Check the diff:
+Plan the changes:
 
 ```sh
-dots # or dots check
+dots check
 ```
 
-On a fresh machine, the check shows a create:
+On a fresh Arch distro, it should show:
 
 ```diff
 Symlinks:
   + symlink ~/.zshrc -> .zshrc
 
-Check: 1 to create, 0 to update, 0 to destroy.
+Packages:
+  + pacman base-devel
+  + pacman git
+  + yay bat
+  + yay ripgrep
+
+Services:
+  + systemd enable docker.service
+  + systemd start docker.service
+
+Check: 7 to create, 0 to update, 0 to destroy.
 ```
 
-Add packages when you are ready:
-
-```lua
-if dots.platform.family == "arch" then
-  dots.yay.enable({ method = "aur" })
-  dots.yay.install({ "bat", "ripgrep" })
-end
-
-if dots.platform.family == "darwin" then
-  dots.brew.enable()
-  dots.brew.install({ "bat", "ripgrep" })
-end
-```
-
-If the diff looks right, apply it:
+Apply the changes:
 
 ```sh
 dots apply
 ```
+
+`dots` will create the symlinks, install the packages, and start the services declared.
+You declare what the system should have and how it should behave, then reuse the
+same setup across the machines that need it.
 
 See the [docs](docs/index.md) for symlinks, packages, services, fonts, user
 settings, profiles, and state.
