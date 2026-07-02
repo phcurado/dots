@@ -7,7 +7,9 @@ use mlua::{Lua, Table, Value};
 
 use crate::command::CommandResource;
 use crate::font::{FontResource, expand_font_source};
-use crate::package::{PackageProvider, PackageResource};
+use crate::package::{
+    PackageList, PackageListFormat, PackageMatcher, PackageProvider, PackageResource,
+};
 use crate::plan::package_id_for;
 use crate::platform::platform_table;
 use crate::project::Project;
@@ -245,32 +247,84 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     }
     for pair in package_providers.pairs::<String, Table>() {
         let (name, item) = pair?;
-        config.package_providers.insert(
-            name,
-            PackageProvider {
-                available: item.get::<String>("available")?,
-                installed: item.get::<String>("installed")?,
-                install: item.get::<String>("install")?,
-                remove: item.get::<String>("remove")?,
-            },
-        );
+        config
+            .package_providers
+            .insert(name.clone(), package_provider_from_table(&name, &item)?);
     }
     for pair in service_providers.pairs::<String, Table>() {
         let (name, item) = pair?;
         config.service_providers.insert(
-            name,
+            name.clone(),
             ServiceProvider {
+                capability: item
+                    .get::<Option<String>>("capability")?
+                    .unwrap_or_else(|| format!("provider:{name}")),
+                available: item
+                    .get::<Option<String>>("available")?
+                    .unwrap_or_else(|| "exit 0".to_string()),
                 started: item.get::<Option<String>>("started")?,
                 start: item.get::<Option<String>>("start")?,
                 stop: item.get::<Option<String>>("stop")?,
                 enabled: item.get::<Option<String>>("enabled")?,
                 enable: item.get::<Option<String>>("enable")?,
                 disable: item.get::<Option<String>>("disable")?,
+                list_started: item.get::<Option<String>>("list_started")?,
+                list_enabled: item.get::<Option<String>>("list_enabled")?,
             },
         );
     }
     dedupe_config(&mut config)?;
     Ok(config)
+}
+
+fn package_provider_from_table(name: &str, item: &Table) -> Result<PackageProvider> {
+    let list = match item.get::<Option<Value>>("list")? {
+        Some(Value::String(command)) => Some(PackageList {
+            command: command.to_string_lossy(),
+            format: PackageListFormat::Lines,
+        }),
+        Some(Value::Table(table)) => {
+            let format = table
+                .get::<Option<String>>("format")?
+                .unwrap_or_else(|| PackageListFormat::Lines.as_str().to_string());
+            Some(PackageList {
+                command: table.get::<String>("command")?,
+                format: PackageListFormat::from_str(&format)
+                    .ok_or_else(|| anyhow::anyhow!("unsupported package list format: {format}"))?,
+            })
+        }
+        Some(_) => bail!("package provider {name} list must be a string or table"),
+        None => None,
+    };
+
+    let package_provides = match item.get::<Option<Table>>("package_provides")? {
+        Some(table) => table
+            .pairs::<String, String>()
+            .collect::<mlua::Result<BTreeMap<_, _>>>()?,
+        None => BTreeMap::new(),
+    };
+
+    let matcher = item
+        .get::<Option<String>>("match")?
+        .map(|matcher| {
+            PackageMatcher::from_str(&matcher)
+                .ok_or_else(|| anyhow::anyhow!("unsupported package matcher: {matcher}"))
+        })
+        .transpose()?
+        .unwrap_or(PackageMatcher::Exact);
+
+    Ok(PackageProvider {
+        capability: item
+            .get::<Option<String>>("capability")?
+            .unwrap_or_else(|| format!("provider:{name}")),
+        available: item.get::<String>("available")?,
+        installed: item.get::<String>("installed")?,
+        install: item.get::<String>("install")?,
+        remove: item.get::<String>("remove")?,
+        list,
+        package_provides,
+        matcher,
+    })
 }
 
 fn dedupe_config(config: &mut Config) -> Result<()> {
@@ -350,12 +404,7 @@ fn install_provider_api(
     let provider_api = lua.create_table()?;
     let dots_for_package = dots.clone();
     let package = lua.create_function(move |lua, (name, spec): (String, Table)| {
-        let provider = PackageProvider {
-            available: spec.get("available")?,
-            installed: spec.get("installed")?,
-            install: spec.get("install")?,
-            remove: spec.get("remove")?,
-        };
+        let provider = package_provider_from_table(&name, &spec).map_err(mlua::Error::external)?;
         register_package_provider(
             lua,
             &dots_for_package,
@@ -371,12 +420,20 @@ fn install_provider_api(
     let dots_for_service = dots.clone();
     let service = lua.create_function(move |lua, (name, spec): (String, Table)| {
         let provider = ServiceProvider {
+            capability: spec
+                .get::<Option<String>>("capability")?
+                .unwrap_or_else(|| format!("provider:{name}")),
+            available: spec
+                .get::<Option<String>>("available")?
+                .unwrap_or_else(|| "exit 0".to_string()),
             started: spec.get("started")?,
             start: spec.get("start")?,
             stop: spec.get("stop")?,
             enabled: spec.get("enabled")?,
             enable: spec.get("enable")?,
             disable: spec.get("disable")?,
+            list_started: spec.get("list_started")?,
+            list_enabled: spec.get("list_enabled")?,
         };
         register_service_provider(
             lua,
@@ -423,10 +480,25 @@ fn register_package_provider(
     provider: PackageProvider,
 ) -> Result<()> {
     let spec = lua.create_table()?;
+    spec.set("capability", provider.capability)?;
     spec.set("available", provider.available)?;
     spec.set("installed", provider.installed)?;
     spec.set("install", provider.install)?;
     spec.set("remove", provider.remove)?;
+    if let Some(list) = provider.list {
+        let table = lua.create_table()?;
+        table.set("command", list.command)?;
+        table.set("format", list.format.as_str())?;
+        spec.set("list", table)?;
+    }
+    if !provider.package_provides.is_empty() {
+        let table = lua.create_table()?;
+        for (package, capability) in provider.package_provides {
+            table.set(package, capability)?;
+        }
+        spec.set("package_provides", table)?;
+    }
+    spec.set("match", provider.matcher.as_str())?;
     providers.set(name, spec)?;
     dots.set(
         name,
@@ -459,12 +531,16 @@ fn register_service_provider(
     provider: ServiceProvider,
 ) -> Result<()> {
     let spec = lua.create_table()?;
+    spec.set("capability", provider.capability)?;
+    spec.set("available", provider.available)?;
     spec.set("started", provider.started)?;
     spec.set("start", provider.start)?;
     spec.set("stop", provider.stop)?;
     spec.set("enabled", provider.enabled)?;
     spec.set("enable", provider.enable)?;
     spec.set("disable", provider.disable)?;
+    spec.set("list_started", provider.list_started)?;
+    spec.set("list_enabled", provider.list_enabled)?;
     providers.set(name, spec)?;
     dots.set(
         name,
@@ -569,16 +645,34 @@ mod tests {
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
-    fn temp_project(config: &str) -> Project {
+    struct TempProject {
+        _dir: tempfile::TempDir,
+        project: Project,
+    }
+
+    impl std::ops::Deref for TempProject {
+        type Target = Project;
+
+        fn deref(&self) -> &Self::Target {
+            &self.project
+        }
+    }
+
+    fn temp_project(config: &str) -> TempProject {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let root =
-            std::env::temp_dir().join(format!("dots-config-test-{}-{id}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("dots-config-test-{id}-"))
+            .tempdir()
+            .unwrap();
+        let root = dir.path().to_path_buf();
         let config_path = root.join("dots.lua");
         fs::write(&config_path, config).unwrap();
-        Project {
-            root,
-            config: config_path,
+        TempProject {
+            _dir: dir,
+            project: Project {
+                root,
+                config: config_path,
+            },
         }
     }
 

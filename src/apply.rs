@@ -7,7 +7,8 @@ use crate::command::{CommandResource, command_apply, command_id_for};
 use crate::font::{FontResource, apply_font, refresh_font_cache, remove_font, state_font};
 use crate::output::{apply_with_status, bold, display_target, green, red, summarize_plan, yellow};
 use crate::package::{
-    PackageProvider, PackageResource, package_provider_available, run_provider_command,
+    PackageProvider, PackageResource, package_provider_available, package_provides,
+    run_provider_command,
 };
 use crate::plan::{
     PlanStep, font_id_for, group_id_for, package_id_for, service_id_for, state_group,
@@ -88,7 +89,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .insert(symlink_id_for(resource), state_symlink(resource));
             }
-            PlanStep::PackageNoop(resource) => {
+            PlanStep::PackageNoop { resource, .. } => {
                 state
                     .resources
                     .insert(package_id_for(resource), state_package(resource));
@@ -273,12 +274,14 @@ fn apply_order(plan: &[PlanStep]) -> Result<Vec<usize>> {
         .enumerate()
         .filter_map(|(index, step)| is_apply_step(step).then_some(index))
         .collect::<Vec<_>>();
+    let action_set = action_indices.iter().copied().collect::<BTreeSet<_>>();
 
     let mut provider = BTreeMap::<String, usize>::new();
     let mut satisfied = BTreeSet::<String>::new();
     for (index, step) in plan.iter().enumerate() {
+        let is_action = action_set.contains(&index);
         if let Some(id) = step_id(step) {
-            if action_indices.contains(&index) {
+            if is_action {
                 provider.entry(id).or_insert(index);
             } else {
                 satisfied.insert(id);
@@ -286,7 +289,7 @@ fn apply_order(plan: &[PlanStep]) -> Result<Vec<usize>> {
         }
 
         let provides = step_provides(step);
-        if action_indices.contains(&index) {
+        if is_action {
             for capability in provides {
                 provider.insert(capability, index);
             }
@@ -294,8 +297,6 @@ fn apply_order(plan: &[PlanStep]) -> Result<Vec<usize>> {
             satisfied.extend(provides);
         }
     }
-
-    let action_set = action_indices.iter().copied().collect::<BTreeSet<_>>();
     let mut edges = BTreeMap::<usize, BTreeSet<usize>>::new();
     let mut indegree = BTreeMap::<usize, usize>::new();
     for &index in &action_indices {
@@ -386,9 +387,9 @@ fn step_id(step: &PlanStep) -> Option<String> {
         PlanStep::CommandCreate(resource) | PlanStep::CommandNoop(resource) => {
             Some(command_id_for(resource))
         }
-        PlanStep::PackageCreate { resource, .. } | PlanStep::PackageRemove { resource, .. } => {
-            Some(package_id_for(resource))
-        }
+        PlanStep::PackageCreate { resource, .. }
+        | PlanStep::PackageRemove { resource, .. }
+        | PlanStep::PackageNoop { resource, .. } => Some(package_id_for(resource)),
         PlanStep::ServiceCreate { resource, .. } | PlanStep::ServiceRemove { resource, .. } => {
             Some(service_id_for(resource))
         }
@@ -416,17 +417,8 @@ fn step_provides(step: &PlanStep) -> Vec<String> {
         PlanStep::CommandCreate(resource) | PlanStep::CommandNoop(resource) => {
             resource.provides.clone()
         }
-        PlanStep::PackageCreate { resource, .. } | PlanStep::PackageNoop(resource) => {
-            package_provides(resource)
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn package_provides(resource: &PackageResource) -> Vec<String> {
-    match (resource.provider.as_str(), resource.name.as_str()) {
-        ("pacman", "paru") => vec!["provider:paru".to_string()],
-        ("pacman", "yay") => vec!["provider:yay".to_string()],
+        PlanStep::PackageCreate { resource, provider }
+        | PlanStep::PackageNoop { resource, provider } => package_provides(provider, resource),
         _ => Vec::new(),
     }
 }
@@ -436,25 +428,13 @@ fn step_needs(step: &PlanStep) -> Vec<String> {
         PlanStep::CommandCreate(resource) => resource.needs.clone(),
         PlanStep::UserGroupAdd(resource) => vec![format!("group:{}", resource.name)],
         PlanStep::SystemGroupRemove(resource) => vec![format!("user-group:{}", resource.name)],
-        PlanStep::PackageCreate { resource, .. } | PlanStep::PackageRemove { resource, .. } => {
-            provider_needs(&resource.provider)
+        PlanStep::PackageCreate { provider, .. } | PlanStep::PackageRemove { provider, .. } => {
+            vec![provider.capability.clone()]
         }
-        PlanStep::ServiceCreate { resource, .. } | PlanStep::ServiceRemove { resource, .. } => {
-            provider_needs(&resource.provider)
+        PlanStep::ServiceCreate { provider, .. } | PlanStep::ServiceRemove { provider, .. } => {
+            vec![provider.capability.clone()]
         }
         _ => Vec::new(),
-    }
-}
-
-fn provider_needs(provider: &str) -> Vec<String> {
-    match provider {
-        "brew" | "brew-cask" | "brew-tap" | "brew-service" => vec!["provider:brew".to_string()],
-        "paru" => vec!["provider:paru".to_string()],
-        "yay" => vec!["provider:yay".to_string()],
-        "pacman" => vec!["provider:pacman".to_string()],
-        "apt" => vec!["provider:apt".to_string()],
-        "systemd" => vec!["provider:systemd".to_string()],
-        provider => vec![format!("provider:{provider}")],
     }
 }
 
@@ -466,7 +446,7 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
                 .resources
                 .insert(symlink_id_for(resource), state_symlink(resource))
                 .is_none(),
-            PlanStep::PackageNoop(resource) => state
+            PlanStep::PackageNoop { resource, .. } => state
                 .resources
                 .insert(package_id_for(resource), state_package(resource))
                 .is_none(),
@@ -601,12 +581,16 @@ fn remove_package(
 mod tests {
     use super::*;
 
-    fn provider() -> PackageProvider {
+    fn provider(capability: &str) -> PackageProvider {
         PackageProvider {
+            capability: capability.to_string(),
             available: "exit 0".to_string(),
             installed: "exit 1".to_string(),
             install: "exit 0".to_string(),
             remove: "exit 0".to_string(),
+            list: None,
+            package_provides: BTreeMap::new(),
+            matcher: crate::package::PackageMatcher::Exact,
         }
     }
 
@@ -617,7 +601,7 @@ mod tests {
                 provider: "brew".to_string(),
                 name: "bat".to_string(),
             },
-            provider: provider(),
+            provider: provider("provider:brew"),
         };
         let command = PlanStep::CommandCreate(CommandResource {
             name: "homebrew".to_string(),
@@ -640,14 +624,18 @@ mod tests {
                 provider: "paru".to_string(),
                 name: "bat".to_string(),
             },
-            provider: provider(),
+            provider: provider("provider:paru"),
         };
+        let mut pacman_provider = provider("provider:pacman");
+        pacman_provider
+            .package_provides
+            .insert("paru".to_string(), "provider:paru".to_string());
         let pacman_paru = PlanStep::PackageCreate {
             resource: PackageResource {
                 provider: "pacman".to_string(),
                 name: "paru".to_string(),
             },
-            provider: provider(),
+            provider: pacman_provider,
         };
         let plan = vec![paru_package, pacman_paru];
 

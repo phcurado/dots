@@ -11,10 +11,81 @@ pub(crate) struct PackageResource {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PackageProvider {
+    pub(crate) capability: String,
     pub(crate) available: String,
     pub(crate) installed: String,
     pub(crate) install: String,
     pub(crate) remove: String,
+    pub(crate) list: Option<PackageList>,
+    pub(crate) package_provides: BTreeMap<String, String>,
+    pub(crate) matcher: PackageMatcher,
+}
+
+impl PackageProvider {
+    pub(crate) fn capability_name(&self) -> String {
+        self.capability
+            .strip_prefix("provider:")
+            .unwrap_or(&self.capability)
+            .to_string()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PackageList {
+    pub(crate) command: String,
+    pub(crate) format: PackageListFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackageListFormat {
+    Lines,
+    BrewFormulae,
+    BrewCasks,
+}
+
+impl PackageListFormat {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Lines => "lines",
+            Self::BrewFormulae => "brew-formulae",
+            Self::BrewCasks => "brew-casks",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "lines" => Some(Self::Lines),
+            "brew-formulae" => Some(Self::BrewFormulae),
+            "brew-casks" => Some(Self::BrewCasks),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackageMatcher {
+    Exact,
+    Basename,
+    CaseInsensitive,
+}
+
+impl PackageMatcher {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Basename => "basename",
+            Self::CaseInsensitive => "case-insensitive",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "exact" => Some(Self::Exact),
+            "basename" => Some(Self::Basename),
+            "case-insensitive" => Some(Self::CaseInsensitive),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn package_provider_available(provider: &PackageProvider) -> Result<bool> {
@@ -36,15 +107,27 @@ pub(crate) struct PackageStatusCache {
     providers: BTreeMap<String, OptionalPackageSet>,
 }
 
+pub(crate) fn package_provides(
+    provider: &PackageProvider,
+    resource: &PackageResource,
+) -> Vec<String> {
+    provider
+        .package_provides
+        .get(&resource.name)
+        .cloned()
+        .into_iter()
+        .collect()
+}
+
 pub(crate) fn package_installed_cached(
     cache: &mut PackageStatusCache,
     provider: &PackageProvider,
     resource: &PackageResource,
 ) -> Result<bool> {
-    if let Some(packages) = packages_for_provider(cache, &resource.provider)? {
+    if let Some(packages) = packages_for_provider(cache, &resource.provider, provider)? {
         return Ok(package_set_contains(
             &packages,
-            &resource.provider,
+            provider.matcher,
             &resource.name,
         ));
     }
@@ -53,51 +136,38 @@ pub(crate) fn package_installed_cached(
 
 fn packages_for_provider(
     cache: &mut PackageStatusCache,
-    provider: &str,
+    provider_name: &str,
+    provider: &PackageProvider,
 ) -> Result<Option<BTreeSet<String>>> {
-    if !cache.providers.contains_key(provider) {
-        populate_provider_cache(cache, provider)?;
+    if !cache.providers.contains_key(provider_name) {
+        populate_provider_cache(cache, provider_name, provider)?;
     }
-    Ok(cache.providers.get(provider).cloned().unwrap_or(None))
+    Ok(cache.providers.get(provider_name).cloned().unwrap_or(None))
 }
 
-fn populate_provider_cache(cache: &mut PackageStatusCache, provider: &str) -> Result<()> {
-    if matches!(provider, "brew" | "brew-cask") {
-        let (formulae, casks) = list_brew_packages()?;
-        cache.providers.insert("brew".to_string(), formulae);
-        cache.providers.insert("brew-cask".to_string(), casks);
-        return Ok(());
-    }
-
+fn populate_provider_cache(
+    cache: &mut PackageStatusCache,
+    provider_name: &str,
+    provider: &PackageProvider,
+) -> Result<()> {
     let packages = list_installed_packages(provider)?;
-    cache.providers.insert(provider.to_string(), packages);
+    cache.providers.insert(provider_name.to_string(), packages);
     Ok(())
 }
 
-fn list_installed_packages(provider: &str) -> Result<Option<BTreeSet<String>>> {
-    let command = match provider {
-        "pacman" | "paru" | "yay" => "pacman -Qq",
-        "apt" => "dpkg-query -W -f='${binary:Package}\\n'",
-        "brew-tap" => "brew tap",
-        _ => return Ok(None),
+fn list_installed_packages(provider: &PackageProvider) -> Result<Option<BTreeSet<String>>> {
+    let Some(list) = &provider.list else {
+        return Ok(None);
     };
-    command_set(command)
-}
-
-fn list_brew_packages() -> Result<(OptionalPackageSet, OptionalPackageSet)> {
-    let output = ProcessCommand::new("brew")
-        .args(["info", "--json=v2", "--installed"])
-        .stdin(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        return parse_brew_info_json(&output.stdout)
-            .map(|(formulae, casks)| (Some(formulae), Some(casks)));
+    match list.format {
+        PackageListFormat::Lines => command_set(&list.command),
+        PackageListFormat::BrewFormulae => command_output_set(&list.command, |source| {
+            parse_brew_info_json(source).map(|(formulae, _)| formulae)
+        }),
+        PackageListFormat::BrewCasks => command_output_set(&list.command, |source| {
+            parse_brew_info_json(source).map(|(_, casks)| casks)
+        }),
     }
-
-    Ok((
-        command_set("brew list --formula -1")?,
-        command_set("brew list --cask -1")?,
-    ))
 }
 
 fn parse_brew_info_json(source: &[u8]) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
@@ -146,6 +216,20 @@ fn insert_json_string_array(values: &mut BTreeSet<String>, value: Option<&serde_
 }
 
 fn command_set(command: &str) -> Result<Option<BTreeSet<String>>> {
+    command_output_set(command, |source| {
+        Ok(String::from_utf8_lossy(source)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect())
+    })
+}
+
+fn command_output_set(
+    command: &str,
+    parse: impl FnOnce(&[u8]) -> Result<BTreeSet<String>>,
+) -> Result<Option<BTreeSet<String>>> {
     let output = ProcessCommand::new("sh")
         .arg("-c")
         .arg(command)
@@ -154,25 +238,18 @@ fn command_set(command: &str) -> Result<Option<BTreeSet<String>>> {
     if !output.status.success() {
         return Ok(None);
     }
-    Ok(Some(
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect(),
-    ))
+    Ok(Some(parse(&output.stdout)?))
 }
 
-fn package_set_contains(packages: &BTreeSet<String>, provider: &str, name: &str) -> bool {
-    match provider {
-        "brew" | "brew-cask" => {
+fn package_set_contains(packages: &BTreeSet<String>, matcher: PackageMatcher, name: &str) -> bool {
+    match matcher {
+        PackageMatcher::Exact => packages.contains(name),
+        PackageMatcher::Basename => {
             packages.contains(name) || packages.contains(name.rsplit('/').next().unwrap_or(name))
         }
-        "brew-tap" => packages
+        PackageMatcher::CaseInsensitive => packages
             .iter()
             .any(|package| package.eq_ignore_ascii_case(name)),
-        _ => packages.contains(name),
     }
 }
 
@@ -228,12 +305,23 @@ mod tests {
     }
 
     #[test]
-    fn brew_taps_match_case_insensitively() {
+    fn basename_matcher_accepts_last_path_component() {
+        let packages = BTreeSet::from(["aerospace".to_string()]);
+
+        assert!(package_set_contains(
+            &packages,
+            PackageMatcher::Basename,
+            "nikitabobko/tap/aerospace"
+        ));
+    }
+
+    #[test]
+    fn case_insensitive_matcher_accepts_different_case() {
         let packages = BTreeSet::from(["felixkratz/formulae".to_string()]);
 
         assert!(package_set_contains(
             &packages,
-            "brew-tap",
+            PackageMatcher::CaseInsensitive,
             "FelixKratz/formulae"
         ));
     }

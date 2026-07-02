@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ServiceResource {
@@ -10,7 +11,8 @@ pub(crate) struct ServiceResource {
     pub(crate) name: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum ServiceAction {
     Start,
     Enable,
@@ -27,12 +29,29 @@ impl ServiceAction {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ServiceProvider {
+    pub(crate) capability: String,
+    pub(crate) available: String,
     pub(crate) started: Option<String>,
     pub(crate) start: Option<String>,
     pub(crate) stop: Option<String>,
     pub(crate) enabled: Option<String>,
     pub(crate) enable: Option<String>,
     pub(crate) disable: Option<String>,
+    pub(crate) list_started: Option<String>,
+    pub(crate) list_enabled: Option<String>,
+}
+
+impl ServiceProvider {
+    pub(crate) fn capability_name(&self) -> String {
+        self.capability
+            .strip_prefix("provider:")
+            .unwrap_or(&self.capability)
+            .to_string()
+    }
+}
+
+pub(crate) fn service_provider_available(provider: &ServiceProvider) -> Result<bool> {
+    run_service_provider_command(&provider.available, true)
 }
 
 pub(crate) fn service_current(
@@ -55,8 +74,8 @@ pub(crate) struct ServiceStatusCache {
 
 #[derive(Debug, Clone, Default)]
 struct ServiceStatus {
-    started: BTreeSet<String>,
-    enabled: BTreeSet<String>,
+    started: Option<BTreeSet<String>>,
+    enabled: Option<BTreeSet<String>>,
 }
 
 pub(crate) fn service_current_cached(
@@ -64,97 +83,59 @@ pub(crate) fn service_current_cached(
     provider: &ServiceProvider,
     resource: &ServiceResource,
 ) -> Result<bool> {
-    if let Some(status) = status_for_provider(cache, &resource.provider)? {
-        return Ok(match resource.action {
-            ServiceAction::Start => status.started.contains(&resource.name),
-            ServiceAction::Enable => status.enabled.contains(&resource.name),
-        });
+    if let Some(status) = status_for_provider(cache, &resource.provider, provider)? {
+        match resource.action {
+            ServiceAction::Start => {
+                if let Some(started) = status.started {
+                    return Ok(started.contains(&resource.name));
+                }
+            }
+            ServiceAction::Enable => {
+                if let Some(enabled) = status.enabled {
+                    return Ok(enabled.contains(&resource.name));
+                }
+            }
+        }
     }
     service_current(provider, resource)
 }
 
 fn status_for_provider(
     cache: &mut ServiceStatusCache,
-    provider: &str,
+    provider_name: &str,
+    provider: &ServiceProvider,
 ) -> Result<Option<ServiceStatus>> {
-    if let Some(status) = cache.providers.get(provider) {
+    if let Some(status) = cache.providers.get(provider_name) {
         return Ok(status.clone());
     }
     let status = list_services(provider)?;
-    cache.providers.insert(provider.to_string(), status.clone());
+    cache
+        .providers
+        .insert(provider_name.to_string(), status.clone());
     Ok(status)
 }
 
-fn list_services(provider: &str) -> Result<Option<ServiceStatus>> {
-    match provider {
-        "systemd" => list_systemd_services(),
-        "brew-service" => list_brew_services(),
-        _ => Ok(None),
+fn list_services(provider: &ServiceProvider) -> Result<Option<ServiceStatus>> {
+    if provider.list_started.is_none() && provider.list_enabled.is_none() {
+        return Ok(None);
     }
-}
 
-fn list_systemd_services() -> Result<Option<ServiceStatus>> {
-    let started = command_lines(
-        "systemctl list-units --type=service --state=running --no-legend --no-pager",
-    )?;
-    let unit_files =
-        command_lines("systemctl list-unit-files --type=service --no-legend --no-pager")?;
-    let Some(started) = started else {
-        return Ok(None);
-    };
-    let Some(unit_files) = unit_files else {
-        return Ok(None);
-    };
-
-    Ok(Some(parse_systemd_services(&started, &unit_files)))
-}
-
-fn parse_systemd_services(running_units: &[String], unit_files: &[String]) -> ServiceStatus {
-    let started = running_units
-        .iter()
-        .filter_map(|line| line.split_whitespace().next())
-        .map(str::to_string)
-        .collect();
-    let enabled = unit_files
-        .iter()
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let name = parts.next()?;
-            let state = parts.next()?;
-            matches!(
-                state,
-                "enabled" | "enabled-runtime" | "linked" | "linked-runtime"
-            )
-            .then(|| name.to_string())
-        })
-        .collect();
-
-    ServiceStatus { started, enabled }
-}
-
-fn list_brew_services() -> Result<Option<ServiceStatus>> {
-    let Some(lines) = command_lines("brew services list")? else {
-        return Ok(None);
-    };
-    Ok(Some(parse_brew_services(&lines)))
-}
-
-fn parse_brew_services(lines: &[String]) -> ServiceStatus {
-    let started = lines
-        .iter()
-        .skip(1)
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let name = parts.next()?;
-            let status = parts.next()?;
-            (status == "started").then(|| name.to_string())
-        })
-        .collect();
-
-    ServiceStatus {
-        started,
-        enabled: BTreeSet::new(),
-    }
+    Ok(Some(ServiceStatus {
+        started: provider
+            .list_started
+            .as_deref()
+            .map(command_lines)
+            .transpose()?
+            .flatten()
+            .map(|lines| lines.into_iter().collect()),
+        enabled: provider
+            .list_enabled
+            .as_deref()
+            .map(command_lines)
+            .transpose()?
+            .flatten()
+            .map(|lines| lines.into_iter().collect()),
+    }))
 }
 
 fn command_lines(command: &str) -> Result<Option<Vec<String>>> {
@@ -212,6 +193,16 @@ pub(crate) fn service_remove(provider: &ServiceProvider, resource: &ServiceResou
     Ok(())
 }
 
+fn run_service_provider_command(command: &str, quiet: bool) -> Result<bool> {
+    let mut process = ProcessCommand::new("sh");
+    process.arg("-c").arg(command);
+    process.stdin(Stdio::null());
+    if quiet {
+        process.stdout(Stdio::null()).stderr(Stdio::null());
+    }
+    Ok(process.status()?.success())
+}
+
 fn run_service_command(command: &str, service: &str, quiet: bool) -> Result<bool> {
     let mut process = ProcessCommand::new("sh");
     process.arg("-c").arg(command);
@@ -234,49 +225,52 @@ fn unsupported_action(resource: &ServiceResource) -> anyhow::Error {
 mod tests {
     use super::*;
 
-    fn lines(source: &str) -> Vec<String> {
-        source.lines().map(str::trim).map(str::to_string).collect()
+    fn provider() -> ServiceProvider {
+        ServiceProvider {
+            capability: "provider:fake".to_string(),
+            available: "exit 0".to_string(),
+            started: Some("exit 1".to_string()),
+            start: Some("exit 0".to_string()),
+            stop: Some("exit 0".to_string()),
+            enabled: Some("exit 1".to_string()),
+            enable: Some("exit 0".to_string()),
+            disable: Some("exit 0".to_string()),
+            list_started: None,
+            list_enabled: None,
+        }
     }
 
     #[test]
-    fn parses_brew_started_services() {
-        let status = parse_brew_services(&lines(
-            r#"
-            Name          Status  User     File
-            atuin         none
-            borders       started phcurado ~/Library/LaunchAgents/homebrew.mxcl.borders.plist
-            sketchybar    started phcurado ~/Library/LaunchAgents/homebrew.mxcl.sketchybar.plist
-            syncthing     none
-            "#,
-        ));
+    fn current_status_uses_started_list() {
+        let mut provider = provider();
+        provider.list_started =
+            Some("printf '%s\\n' docker.service tailscaled.service".to_string());
+        let resource = ServiceResource {
+            provider: "fake".to_string(),
+            action: ServiceAction::Start,
+            name: "docker.service".to_string(),
+        };
 
-        assert!(status.started.contains("borders"));
-        assert!(status.started.contains("sketchybar"));
-        assert!(!status.started.contains("atuin"));
-    }
-
-    #[test]
-    fn parses_systemd_started_and_enabled_services() {
-        let status = parse_systemd_services(
-            &lines(
-                r#"
-                docker.service loaded active running Docker Application Container Engine
-                tailscaled.service loaded active running Tailscale node agent
-                "#,
-            ),
-            &lines(
-                r#"
-                docker.service enabled disabled
-                postgresql.service enabled disabled
-                sddm.service disabled disabled
-                "#,
-            ),
+        assert!(
+            service_current_cached(&mut ServiceStatusCache::default(), &provider, &resource)
+                .unwrap()
         );
+    }
 
-        assert!(status.started.contains("docker.service"));
-        assert!(status.started.contains("tailscaled.service"));
-        assert!(status.enabled.contains("docker.service"));
-        assert!(status.enabled.contains("postgresql.service"));
-        assert!(!status.enabled.contains("sddm.service"));
+    #[test]
+    fn current_status_uses_enabled_list() {
+        let mut provider = provider();
+        provider.list_enabled =
+            Some("printf '%s\\n' docker.service postgresql.service".to_string());
+        let resource = ServiceResource {
+            provider: "fake".to_string(),
+            action: ServiceAction::Enable,
+            name: "postgresql.service".to_string(),
+        };
+
+        assert!(
+            service_current_cached(&mut ServiceStatusCache::default(), &provider, &resource)
+                .unwrap()
+        );
     }
 }

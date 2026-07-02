@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::Result;
 
@@ -10,10 +9,11 @@ use crate::config::Config;
 use crate::font::{FontResource, font_matches, state_font};
 use crate::package::{
     PackageProvider, PackageResource, PackageStatusCache, package_installed_cached,
-    package_provider_available,
+    package_provider_available, package_provides,
 };
 use crate::service::{
     ServiceProvider, ServiceResource, ServiceStatusCache, service_current_cached,
+    service_provider_available,
 };
 use crate::state::{State, StateResource};
 use crate::symlink::{
@@ -47,7 +47,10 @@ pub(crate) enum PlanStep {
         resource: PackageResource,
         provider: PackageProvider,
     },
-    PackageNoop(PackageResource),
+    PackageNoop {
+        resource: PackageResource,
+        provider: PackageProvider,
+    },
     PackageConflict {
         resource: PackageResource,
         reason: String,
@@ -131,8 +134,7 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
         let Some(provider) = config.service_providers.get(&resource.provider) else {
             continue;
         };
-        let capability = provider_capability(&resource.provider);
-        if capability_available(&capability)?
+        if service_provider_available(provider)?
             && service_current_cached(&mut service_status, provider, resource)?
         {
             state
@@ -235,7 +237,9 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
 
     let (command_steps, mut provided_capabilities) = plan_commands(&config.commands)?;
     for resource in &config.packages {
-        provided_capabilities.extend(package_provides(resource));
+        if let Some(provider) = config.package_providers.get(&resource.provider) {
+            provided_capabilities.extend(package_provides(provider, resource));
+        }
     }
 
     let mut missing_capabilities = BTreeSet::new();
@@ -251,18 +255,21 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             });
             continue;
         };
-        let capability = provider_capability(&resource.provider);
-        if !provided_capabilities.contains(&capability) && !package_provider_available(provider)? {
+        let capability = &provider.capability;
+        if !provided_capabilities.contains(capability) && !package_provider_available(provider)? {
             if missing_capabilities.insert(capability.clone()) {
                 plan.push(PlanStep::CapabilityConflict {
-                    capability: capability_name(&capability),
+                    capability: provider.capability_name(),
                     reason: "is not available".to_string(),
                 });
             }
             continue;
         }
         if package_installed_cached(&mut package_status, provider, resource)? {
-            plan.push(PlanStep::PackageNoop(resource.clone()));
+            plan.push(PlanStep::PackageNoop {
+                resource: resource.clone(),
+                provider: provider.clone(),
+            });
         } else {
             plan.push(PlanStep::PackageCreate {
                 resource: resource.clone(),
@@ -307,11 +314,11 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             });
             continue;
         };
-        let capability = provider_capability(&resource.provider);
-        if !provided_capabilities.contains(&capability) && !capability_available(&capability)? {
+        let capability = &provider.capability;
+        if !provided_capabilities.contains(capability) && !service_provider_available(provider)? {
             if missing_capabilities.insert(capability.clone()) {
                 plan.push(PlanStep::CapabilityConflict {
-                    capability: capability_name(&capability),
+                    capability: provider.capability_name(),
                     reason: "is not available".to_string(),
                 });
             }
@@ -424,14 +431,9 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                 action,
                 name,
             } => {
-                let action = match action.as_str() {
-                    "start" => crate::service::ServiceAction::Start,
-                    "enable" => crate::service::ServiceAction::Enable,
-                    _ => continue,
-                };
                 let resource = ServiceResource {
                     provider: provider.clone(),
-                    action,
+                    action: *action,
                     name: name.clone(),
                 };
                 match config.service_providers.get(provider) {
@@ -475,44 +477,6 @@ fn plan_commands(commands: &[CommandResource]) -> Result<(Vec<PlanStep>, BTreeSe
     Ok((plan, provided))
 }
 
-fn package_provides(resource: &PackageResource) -> Vec<String> {
-    match (resource.provider.as_str(), resource.name.as_str()) {
-        ("pacman", "paru") => vec!["provider:paru".to_string()],
-        ("pacman", "yay") => vec!["provider:yay".to_string()],
-        _ => Vec::new(),
-    }
-}
-
-fn provider_capability(provider: &str) -> String {
-    match provider {
-        "brew" | "brew-cask" | "brew-tap" | "brew-service" => "provider:brew".to_string(),
-        provider => format!("provider:{provider}"),
-    }
-}
-
-fn capability_name(capability: &str) -> String {
-    capability
-        .strip_prefix("provider:")
-        .unwrap_or(capability)
-        .to_string()
-}
-
-fn capability_available(capability: &str) -> Result<bool> {
-    let command = match capability {
-        "provider:brew" => "command -v brew >/dev/null",
-        "provider:systemd" => "command -v systemctl >/dev/null",
-        _ => return Ok(true),
-    };
-    Ok(ProcessCommand::new("sh")
-        .arg("-c")
-        .arg(command)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?
-        .success())
-}
-
 pub(crate) fn state_package(resource: &PackageResource) -> StateResource {
     StateResource::Package {
         provider: resource.provider.clone(),
@@ -527,7 +491,7 @@ pub(crate) fn package_id_for(resource: &PackageResource) -> String {
 pub(crate) fn state_service(resource: &ServiceResource) -> StateResource {
     StateResource::Service {
         provider: resource.provider.clone(),
-        action: resource.action.as_str().to_string(),
+        action: resource.action,
         name: resource.name.clone(),
     }
 }
@@ -568,13 +532,18 @@ pub(crate) fn font_id_for(resource: &FontResource) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn fake_provider(available: &str, installed: &str) -> PackageProvider {
         PackageProvider {
+            capability: "provider:fake".to_string(),
             available: available.to_string(),
             installed: installed.to_string(),
             install: "exit 0".to_string(),
             remove: "exit 0".to_string(),
+            list: None,
+            package_provides: BTreeMap::new(),
+            matcher: crate::package::PackageMatcher::Exact,
         }
     }
 
@@ -639,16 +608,14 @@ mod tests {
         let plan = build_plan(&config, &state).unwrap();
 
         assert!(state.resources.contains_key("package:fake:bat"));
-        assert!(matches!(plan.as_slice(), [PlanStep::PackageNoop(_)]));
+        assert!(matches!(plan.as_slice(), [PlanStep::PackageNoop { .. }]));
     }
 
     #[test]
     fn identical_regular_symlink_target_can_be_replaced() {
-        let root =
-            std::env::temp_dir().join(format!("dots-identical-target-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let target = root.join("target");
-        let source = root.join("source");
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        let source = root.path().join("source");
         fs::write(&target, "same").unwrap();
         fs::write(&source, "same").unwrap();
 
@@ -662,9 +629,9 @@ mod tests {
 
     #[test]
     fn untracked_stale_symlinks_under_managed_directory_are_removed() {
-        let root = std::env::temp_dir().join(format!("dots-stale-link-{}", std::process::id()));
-        let source_root = root.join("source");
-        let target_root = root.join("target");
+        let root = tempfile::tempdir().unwrap();
+        let source_root = root.path().join("source");
+        let target_root = root.path().join("target");
         fs::create_dir_all(&source_root).unwrap();
         fs::create_dir_all(&target_root).unwrap();
         fs::write(source_root.join("current"), "current").unwrap();

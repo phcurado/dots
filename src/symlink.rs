@@ -4,7 +4,7 @@ use std::fs;
 use std::os::unix::fs as unix_fs;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
 use crate::state::{State, StateResource};
@@ -329,24 +329,74 @@ pub(crate) fn apply_symlink(resource: &SymlinkResource, state: &mut State) -> Re
     if let Some(parent) = resource.target.parent() {
         fs::create_dir_all(parent)?;
     }
-    if resource.target.exists() || fs::symlink_metadata(&resource.target).is_ok() {
-        fs::remove_file(&resource.target)?;
-    }
+    ensure_safe_to_replace(resource, state)?;
+
     let link_target = relative_path(
         resource.target.parent().unwrap_or_else(|| Path::new(".")),
         &resource.source,
     );
-    unix_fs::symlink(&link_target, &resource.target).with_context(|| {
+    let tmp = temporary_link_path(&resource.target);
+    unix_fs::symlink(&link_target, &tmp).with_context(|| {
         format!(
             "failed to symlink {} -> {}",
-            resource.target.display(),
+            tmp.display(),
             resource.source.display()
         )
     })?;
+    if let Err(error) = fs::rename(&tmp, &resource.target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error).with_context(|| {
+            format!(
+                "failed to symlink {} -> {}",
+                resource.target.display(),
+                resource.source.display()
+            )
+        });
+    }
     state
         .resources
         .insert(symlink_id_for(resource), state_symlink(resource));
     Ok(())
+}
+
+fn ensure_safe_to_replace(resource: &SymlinkResource, state: &State) -> Result<()> {
+    let Ok(metadata) = fs::symlink_metadata(&resource.target) else {
+        return Ok(());
+    };
+
+    if metadata.file_type().is_symlink() {
+        let current = resolve_symlink_target(&resource.target, &fs::read_link(&resource.target)?);
+        if same_path(&current, &resource.source)
+            || state
+                .resources
+                .get(&symlink_id_for(resource))
+                .is_some_and(|state_resource| match state_resource {
+                    StateResource::Symlink { source, .. } => same_path(&current, source),
+                    _ => false,
+                })
+        {
+            return Ok(());
+        }
+    } else if metadata.is_file() && regular_file_matches(resource)? {
+        return Ok(());
+    }
+
+    bail!(
+        "refusing to replace unmanaged target: {}",
+        resource.target.display()
+    )
+}
+
+fn temporary_link_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "link".into());
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    target.with_file_name(format!(".{name}.dots-tmp-{}-{nonce}", std::process::id()))
 }
 
 pub(crate) fn remove_symlink(resource: &StateResource, state: &mut State) -> Result<()> {
@@ -375,15 +425,18 @@ mod tests {
 
     #[test]
     fn missing_paths_are_not_the_same_path() {
-        let base = std::env::temp_dir().join(format!("dots-missing-{}", std::process::id()));
-        assert!(!same_path(&base.join("one"), &base.join("two")));
+        let base = tempfile::tempdir().unwrap();
+        assert!(!same_path(
+            &base.path().join("one"),
+            &base.path().join("two")
+        ));
     }
 
     #[test]
     fn apply_symlink_uses_relative_link_target() {
-        let root = std::env::temp_dir().join(format!("dots-relative-link-{}", std::process::id()));
-        let source = root.join("repo/.config/app/config.toml");
-        let target = root.join("home/.config/app/config.toml");
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("repo/.config/app/config.toml");
+        let target = root.path().join("home/.config/app/config.toml");
         fs::create_dir_all(source.parent().unwrap()).unwrap();
         fs::write(&source, "config").unwrap();
 
@@ -401,10 +454,25 @@ mod tests {
     }
 
     #[test]
+    fn apply_symlink_refuses_unmanaged_target() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        fs::write(&source, "source").unwrap();
+        fs::write(&target, "other").unwrap();
+
+        let error = apply_symlink(&SymlinkResource { target, source }, &mut State::default())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("refusing to replace unmanaged target"));
+    }
+
+    #[test]
     fn remove_symlink_removes_link_to_missing_source() {
-        let root = std::env::temp_dir().join(format!("dots-remove-missing-{}", std::process::id()));
-        let source = root.join("repo/removed");
-        let target = root.join("home/removed");
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("repo/removed");
+        let target = root.path().join("home/removed");
         fs::create_dir_all(target.parent().unwrap()).unwrap();
         unix_fs::symlink(&source, &target).unwrap();
 
@@ -423,9 +491,9 @@ mod tests {
 
     #[test]
     fn directory_expansion_ignores_git_metadata() {
-        let root = std::env::temp_dir().join(format!("dots-git-ignore-{}", std::process::id()));
-        let source = root.join("source");
-        let target = root.join("target");
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
         fs::create_dir_all(source.join("plugin/.git")).unwrap();
         fs::create_dir_all(target.join("plugin")).unwrap();
         fs::write(source.join("plugin/.git/config"), "").unwrap();
@@ -452,9 +520,9 @@ mod tests {
 
     #[test]
     fn stale_symlink_scan_skips_top_level_target_dirs_missing_from_source() {
-        let root = std::env::temp_dir().join(format!("dots-stale-skip-{}", std::process::id()));
-        let source = root.join("source");
-        let target = root.join("target");
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(target.join("large/unrelated/tree")).unwrap();
         let stale = target.join("large/unrelated/tree/stale");
@@ -475,9 +543,9 @@ mod tests {
 
     #[test]
     fn stale_symlink_scan_keeps_scanning_inside_managed_dirs() {
-        let root = std::env::temp_dir().join(format!("dots-stale-inside-{}", std::process::id()));
-        let source = root.join("source");
-        let target = root.join("target");
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
         fs::create_dir_all(source.join("nvim")).unwrap();
         fs::create_dir_all(target.join("nvim/removed-plugin")).unwrap();
         let stale = target.join("nvim/removed-plugin/init.lua");
@@ -498,9 +566,9 @@ mod tests {
 
     #[test]
     fn stale_symlink_scan_handles_relative_links_with_parent_segments() {
-        let root = std::env::temp_dir().join(format!("dots-stale-relative-{}", std::process::id()));
-        let source = root.join("repo/.config");
-        let target = root.join("home/.config");
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("repo/.config");
+        let target = root.path().join("home/.config");
         fs::create_dir_all(source.join("nvim")).unwrap();
         fs::create_dir_all(target.join("nvim/removed-plugin")).unwrap();
         let stale = target.join("nvim/removed-plugin/init.lua");

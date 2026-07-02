@@ -1,8 +1,10 @@
 dots.provider.package("paru", {
+	capability = "provider:paru",
 	available = "command -v paru >/dev/null",
 	installed = 'paru -Q "$DOTS_PACKAGE" >/dev/null 2>&1',
 	install = 'paru -S --needed --noconfirm "$DOTS_PACKAGE"',
 	remove = 'paru -Rns --noconfirm "$DOTS_PACKAGE"',
+	list = "pacman -Qq",
 })
 
 dots.paru.enable = function(opts)

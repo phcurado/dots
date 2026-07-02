@@ -72,7 +72,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::UserGroupConflict { .. }
             | PlanStep::CapabilityConflict { .. } => summary.conflicts += 1,
             PlanStep::SymlinkNoop(_)
-            | PlanStep::PackageNoop(_)
+            | PlanStep::PackageNoop { .. }
             | PlanStep::ServiceNoop(_)
             | PlanStep::FontNoop(_)
             | PlanStep::UserShellNoop
@@ -393,7 +393,7 @@ pub(crate) fn print_state(project: &Project, state: &State) {
                 provider,
                 action,
                 name,
-            } => println!("  service {provider} {action} {name}"),
+            } => println!("  service {provider} {} {name}", action.as_str()),
             StateResource::Font { target, .. } => println!("  font {}", display_target(target)),
             StateResource::Group { name } => println!("  group {name}"),
             StateResource::UserGroup { name } => println!("  user group {name}"),

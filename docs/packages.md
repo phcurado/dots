@@ -108,6 +108,7 @@ dots.provider.package("cargo", {
   installed = "cargo install --list | grep -q \"^$DOTS_PACKAGE \"",
   install = "cargo install \"$DOTS_PACKAGE\"",
   remove = "cargo uninstall \"$DOTS_PACKAGE\"",
+  list = "cargo install --list | awk '/^[^ ]/ { print $1 }'",
 })
 
 dots.cargo.install({ "tree-sitter-cli" })
@@ -115,6 +116,20 @@ dots.cargo.install({ "tree-sitter-cli" })
 
 Provider commands run through `sh -c`. The package name is available as
 `DOTS_PACKAGE`.
+
+Optional provider fields:
+
+- `list`: bulk installed-package command. If omitted, `dots` falls back to the
+  per-package `installed` command.
+- `capability`: prerequisite name for the provider. Defaults to
+  `provider:<name>`.
+- `package_provides`: map package names to capabilities they provide, for cases
+  like installing a package manager with another package manager.
+- `match`: installed-list matching mode, one of `exact`, `basename`, or
+  `case-insensitive`. Defaults to `exact`.
+
+`dots check` runs provider `available`, `installed`, and `list` commands to sync
+state and build the plan. These commands should be safe to run more than once.
 
 If a package manager needs more logic than fits in one line, put the logic in a
 script and call the script from the provider command.

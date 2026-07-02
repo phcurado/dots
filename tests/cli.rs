@@ -1,16 +1,32 @@
 use std::fs;
 use std::io::Write;
+use std::ops::Deref;
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("dots-{name}-{}-{id}", std::process::id()));
-    fs::create_dir_all(&path).unwrap();
-    path
+struct TempDir(tempfile::TempDir);
+
+impl Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.path()
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
+    TempDir(
+        tempfile::Builder::new()
+            .prefix(&format!("dots-{name}-"))
+            .tempdir()
+            .unwrap(),
+    )
 }
 
 #[test]
@@ -183,6 +199,40 @@ fn check_prints_capability_conflicts() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Capabilities:"));
     assert!(stdout.contains("! fake is not available"));
+}
+
+#[test]
+fn apply_auto_approve_skips_confirmation() {
+    let root = temp_dir("cli-apply-auto-approve");
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        dots.provider.package("fake", {
+          available = "exit 0",
+          installed = "exit 1",
+          install = "exit 0",
+          remove = "exit 0",
+        })
+
+        dots.fake.install({ "bat" })
+        "#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("apply")
+        .arg("--auto-approve")
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("Type 'yes' to apply these changes."));
+    assert!(stdout.contains("Apply complete:"));
 }
 
 #[test]

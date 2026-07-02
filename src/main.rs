@@ -22,7 +22,7 @@ use output::{
 use plan::{build_plan, refresh_state_from_system};
 use platform::selected_profile;
 use project::{Project, find_project};
-use state::{State, load_state, save_state};
+use state::{State, StateResource, load_state, save_state};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -51,7 +51,11 @@ enum Command {
     /// Create a starter dots.lua and ignore local state.
     Init,
     /// Apply the checked changes.
-    Apply,
+    Apply {
+        /// Apply without prompting for confirmation.
+        #[arg(long)]
+        auto_approve: bool,
+    },
     /// Inspect or edit local state.
     State {
         #[command(subcommand)]
@@ -89,29 +93,13 @@ fn main() -> Result<()> {
 
     match command {
         Command::Check => {
-            if !state_exists {
-                print_state_initialized(&project, &state_path);
-            }
-            let plan = with_spinner("Checking system...", || {
-                let config = load_config(&project, &profile)?;
-                refresh_state_from_system(&config, &mut state)?;
-                save_state(&state_path, &state)?;
-                build_plan(&config, &state)
-            })?;
+            let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
             print_plan(&project, &plan, true);
         }
-        Command::Apply => {
-            if !state_exists {
-                print_state_initialized(&project, &state_path);
-            }
-            let plan = with_spinner("Checking system...", || {
-                let config = load_config(&project, &profile)?;
-                refresh_state_from_system(&config, &mut state)?;
-                save_state(&state_path, &state)?;
-                build_plan(&config, &state)
-            })?;
+        Command::Apply { auto_approve } => {
+            let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
             print_plan(&project, &plan, false);
-            confirm_apply(&plan)?;
+            confirm_apply(&plan, auto_approve)?;
             apply_plan(&plan, &mut state)?;
             save_state(&state_path, &state)?;
         }
@@ -122,6 +110,24 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn check_project(
+    project: &Project,
+    profile: &str,
+    state_path: &Path,
+    state_exists: bool,
+    state: &mut State,
+) -> Result<Vec<plan::PlanStep>> {
+    if !state_exists {
+        print_state_initialized(project, state_path);
+    }
+    with_spinner("Checking system...", || {
+        let config = load_config(project, profile)?;
+        refresh_state_from_system(&config, state)?;
+        save_state(state_path, state)?;
+        build_plan(&config, state)
+    })
 }
 
 fn init_project(file: Option<&Path>) -> Result<()> {
@@ -210,9 +216,12 @@ local packages = { "bat", "ripgrep" }
 "#
 }
 
-fn confirm_apply(plan: &[plan::PlanStep]) -> Result<()> {
+fn confirm_apply(plan: &[plan::PlanStep], auto_approve: bool) -> Result<()> {
     let summary = summarize_plan(plan);
-    if summary.conflicts > 0 || summary.create + summary.update + summary.remove == 0 {
+    if auto_approve
+        || summary.conflicts > 0
+        || summary.create + summary.update + summary.remove == 0
+    {
         return Ok(());
     }
 
@@ -251,12 +260,9 @@ fn run_state_command(
 }
 
 fn state_key_from_arg(resource: &str) -> String {
-    if resource.starts_with("symlink:")
-        || resource.starts_with("package:")
-        || resource.starts_with("service:")
-        || resource.starts_with("font:")
-        || resource.starts_with("group:")
-        || resource.starts_with("user-group:")
+    if StateResource::KEY_PREFIXES
+        .iter()
+        .any(|prefix| resource.starts_with(prefix))
     {
         resource.to_string()
     } else {

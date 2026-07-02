@@ -140,3 +140,9 @@ Apply?
 
 After applying, `dots` creates the symlink and installs the package for the
 current operating system.
+
+For non-interactive bootstrap scripts, use:
+
+```sh
+dots apply --auto-approve
+```

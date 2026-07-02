@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::service::ServiceAction;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub(crate) enum StateResource {
@@ -15,7 +17,7 @@ pub(crate) enum StateResource {
     #[serde(rename = "service")]
     Service {
         provider: String,
-        action: String,
+        action: ServiceAction,
         name: String,
     },
     #[serde(rename = "font")]
@@ -31,9 +33,24 @@ pub(crate) struct State {
     pub(crate) resources: BTreeMap<String, StateResource>,
 }
 
+impl StateResource {
+    pub(crate) const KEY_PREFIXES: &'static [&'static str] = &[
+        "symlink:",
+        "package:",
+        "service:",
+        "font:",
+        "group:",
+        "user-group:",
+    ];
+}
+
 pub(crate) fn load_state(path: &Path) -> Result<State> {
-    let Some(source) = fs::read_to_string(path).ok() else {
-        return Ok(State::default());
+    let source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(State::default()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
     };
     serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
 }
@@ -46,4 +63,27 @@ pub(crate) fn save_state(path: &Path, state: &State) -> Result<()> {
     fs::write(&tmp, serde_json::to_string_pretty(state)?)?;
     fs::rename(tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_state_loads_as_empty() {
+        let root = tempfile::tempdir().unwrap();
+
+        let state = load_state(&root.path().join("missing.json")).unwrap();
+
+        assert!(state.resources.is_empty());
+    }
+
+    #[test]
+    fn load_state_returns_read_errors() {
+        let root = tempfile::tempdir().unwrap();
+
+        let error = load_state(root.path()).unwrap_err().to_string();
+
+        assert!(error.contains("failed to read"));
+    }
 }

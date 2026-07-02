@@ -1,8 +1,10 @@
 dots.provider.package("yay", {
+	capability = "provider:yay",
 	available = "command -v yay >/dev/null",
 	installed = 'yay -Q "$DOTS_PACKAGE" >/dev/null 2>&1',
 	install = 'yay -S --needed --noconfirm "$DOTS_PACKAGE"',
 	remove = 'yay -Rns --noconfirm "$DOTS_PACKAGE"',
+	list = "pacman -Qq",
 })
 
 dots.yay.enable = function(opts)
