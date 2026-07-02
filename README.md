@@ -9,7 +9,7 @@
 **[Docs](https://phcurado.github.io/dots/) &nbsp;&nbsp;•&nbsp;&nbsp;**
 **[Quick start](https://phcurado.github.io/dots/quick-start) &nbsp;&nbsp;•&nbsp;&nbsp;**
 **[Install](https://phcurado.github.io/dots/install) &nbsp;&nbsp;•&nbsp;&nbsp;**
-**[Changelog](https://phcurado.github.io/dots/changelog) &nbsp;&nbsp;•&nbsp;&nbsp;**
+**[Changelog](https://github.com/phcurado/dots/blob/main/CHANGELOG.md) &nbsp;&nbsp;•&nbsp;&nbsp;**
 **[Release](https://github.com/phcurado/dots/releases)**
 
 </div>

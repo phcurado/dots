@@ -37,7 +37,7 @@ export default defineConfig({
       {
         text: "Project",
         items: [
-          { text: "Changelog", link: "/changelog" },
+          { text: "Changelog", link: "https://github.com/phcurado/dots/blob/main/CHANGELOG.md" },
           { text: "Release", link: "/release" },
         ],
       },

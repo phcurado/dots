@@ -1,4 +1,34 @@
-# Changelog
+# CHANGELOG
+
+## 0.4.0
+
+`0.4.0` makes providers more extensible and improves non-interactive and safety
+behavior.
+
+### Added
+
+- `dots apply --auto-approve` for non-interactive bootstrap scripts.
+- Package provider metadata for capabilities, bulk list commands, match modes,
+  and package-provided capabilities.
+- Service provider metadata for availability checks and bulk started/enabled
+  status lists.
+- Shared package list command output caching, so providers like `brew` and
+  `brew-cask` can reuse one slow probe.
+
+### Changed
+
+- Built-in package and service provider details now live in Lua provider specs
+  instead of hardcoded Rust branches.
+- `dots check` provider probes are documented as state-syncing checks that may
+  run configured shell commands.
+- Tests now use temporary directories that clean themselves up.
+
+### Fixed
+
+- State loading now reports read errors instead of treating them as empty state.
+- Symlink apply re-checks target safety and replaces links atomically.
+- Service actions in state are enum-backed instead of re-parsed from arbitrary
+  strings.
 
 ## 0.3.1
 
