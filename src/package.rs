@@ -101,10 +101,12 @@ pub(crate) fn package_installed(
 
 type PackageSet = BTreeSet<String>;
 type OptionalPackageSet = Option<PackageSet>;
+type OptionalCommandOutput = Option<Vec<u8>>;
 
 #[derive(Debug, Default)]
 pub(crate) struct PackageStatusCache {
     providers: BTreeMap<String, OptionalPackageSet>,
+    command_outputs: BTreeMap<String, OptionalCommandOutput>,
 }
 
 pub(crate) fn package_provides(
@@ -150,21 +152,26 @@ fn populate_provider_cache(
     provider_name: &str,
     provider: &PackageProvider,
 ) -> Result<()> {
-    let packages = list_installed_packages(provider)?;
+    let packages = list_installed_packages(cache, provider)?;
     cache.providers.insert(provider_name.to_string(), packages);
     Ok(())
 }
 
-fn list_installed_packages(provider: &PackageProvider) -> Result<Option<BTreeSet<String>>> {
+fn list_installed_packages(
+    cache: &mut PackageStatusCache,
+    provider: &PackageProvider,
+) -> Result<Option<BTreeSet<String>>> {
     let Some(list) = &provider.list else {
         return Ok(None);
     };
     match list.format {
-        PackageListFormat::Lines => command_set(&list.command),
-        PackageListFormat::BrewFormulae => command_output_set(&list.command, |source| {
-            parse_brew_info_json(source).map(|(formulae, _)| formulae)
-        }),
-        PackageListFormat::BrewCasks => command_output_set(&list.command, |source| {
+        PackageListFormat::Lines => command_output_set_cached(cache, &list.command, parse_lines),
+        PackageListFormat::BrewFormulae => {
+            command_output_set_cached(cache, &list.command, |source| {
+                parse_brew_info_json(source).map(|(formulae, _)| formulae)
+            })
+        }
+        PackageListFormat::BrewCasks => command_output_set_cached(cache, &list.command, |source| {
             parse_brew_info_json(source).map(|(_, casks)| casks)
         }),
     }
@@ -215,21 +222,35 @@ fn insert_json_string_array(values: &mut BTreeSet<String>, value: Option<&serde_
     }
 }
 
-fn command_set(command: &str) -> Result<Option<BTreeSet<String>>> {
-    command_output_set(command, |source| {
-        Ok(String::from_utf8_lossy(source)
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect())
-    })
+fn parse_lines(source: &[u8]) -> Result<BTreeSet<String>> {
+    Ok(String::from_utf8_lossy(source)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
-fn command_output_set(
+fn command_output_set_cached(
+    cache: &mut PackageStatusCache,
     command: &str,
     parse: impl FnOnce(&[u8]) -> Result<BTreeSet<String>>,
 ) -> Result<Option<BTreeSet<String>>> {
+    if !cache.command_outputs.contains_key(command) {
+        let output = command_output(command)?;
+        cache.command_outputs.insert(command.to_string(), output);
+    }
+    let Some(output) = cache
+        .command_outputs
+        .get(command)
+        .and_then(|output| output.as_ref())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(parse(output)?))
+}
+
+fn command_output(command: &str) -> Result<Option<Vec<u8>>> {
     let output = ProcessCommand::new("sh")
         .arg("-c")
         .arg(command)
@@ -238,7 +259,7 @@ fn command_output_set(
     if !output.status.success() {
         return Ok(None);
     }
-    Ok(Some(parse(&output.stdout)?))
+    Ok(Some(output.stdout))
 }
 
 fn package_set_contains(packages: &BTreeSet<String>, matcher: PackageMatcher, name: &str) -> bool {
@@ -273,6 +294,7 @@ pub(crate) fn run_provider_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn brew_info_parser_includes_formula_aliases() {
@@ -302,6 +324,56 @@ mod tests {
         assert!(formulae.contains("7zip"));
         assert!(casks.contains("aerospace"));
         assert!(casks.contains("nikitabobko/tap/aerospace"));
+    }
+
+    #[test]
+    fn shared_list_command_runs_once() {
+        let root = tempfile::tempdir().unwrap();
+        let count = root.path().join("count");
+        let command = format!(
+            "n=$(cat '{}' 2>/dev/null || echo 0); echo $((n + 1)) > '{}'; printf '%s\\n' bat",
+            count.display(),
+            count.display()
+        );
+        let provider = PackageProvider {
+            capability: "provider:fake".to_string(),
+            available: "exit 0".to_string(),
+            installed: "exit 1".to_string(),
+            install: "exit 0".to_string(),
+            remove: "exit 0".to_string(),
+            list: Some(PackageList {
+                command,
+                format: PackageListFormat::Lines,
+            }),
+            package_provides: BTreeMap::new(),
+            matcher: PackageMatcher::Exact,
+        };
+        let mut cache = PackageStatusCache::default();
+
+        assert!(
+            package_installed_cached(
+                &mut cache,
+                &provider,
+                &PackageResource {
+                    provider: "one".to_string(),
+                    name: "bat".to_string(),
+                },
+            )
+            .unwrap()
+        );
+        assert!(
+            package_installed_cached(
+                &mut cache,
+                &provider,
+                &PackageResource {
+                    provider: "two".to_string(),
+                    name: "bat".to_string(),
+                },
+            )
+            .unwrap()
+        );
+
+        assert_eq!(fs::read_to_string(count).unwrap().trim(), "1");
     }
 
     #[test]
