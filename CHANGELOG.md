@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.5.1
+
+`0.5.1` improves diagnostics for symlink declarations whose source file is
+missing.
+
+### Fixed
+
+- Missing symlink sources now report when the target already points to another
+  source, which makes scratch-repo testing easier to understand.
+
 ## 0.5.0
 
 `0.5.0` adds symlink-focused workflows for importing existing files into a

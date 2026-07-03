@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::Result;
 use owo_colors::OwoColorize;
 
-use crate::plan::PlanStep;
+use crate::plan::{PlanStep, SymlinkConflictReason};
 use crate::project::Project;
 use crate::state::{State, StateResource};
 use crate::symlink::{SymlinkCandidate, home_dir};
@@ -43,6 +43,32 @@ pub(crate) fn display_source(project: &Project, path: &Path) -> String {
         return rest.display().to_string();
     }
     display_target(path)
+}
+
+fn display_symlink_conflict_reason(
+    project: &Project,
+    resource: &crate::symlink::SymlinkResource,
+    reason: &SymlinkConflictReason,
+) -> String {
+    match reason {
+        SymlinkConflictReason::MissingSource { current_target } => {
+            let mut message = format!(
+                "repo file is missing: {}",
+                display_source(project, &resource.source)
+            );
+            if let Some(current_target) = current_target {
+                message.push_str(&format!(
+                    "; target is already linked to {}",
+                    display_target(current_target)
+                ));
+            }
+            message
+        }
+        SymlinkConflictReason::TargetUnmanaged => "target exists but is not managed".to_string(),
+        SymlinkConflictReason::TargetExistsNotSymlink => {
+            "target exists and is not a symlink".to_string()
+        }
+    }
 }
 
 pub(crate) fn print_symlink_candidates<'a>(
@@ -158,9 +184,10 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
                     }
                 }
                 PlanStep::SymlinkConflict { resource, reason } => println!(
-                    "  {} symlink {} ({reason})",
+                    "  {} symlink {} ({})",
                     red("!"),
-                    display_target(&resource.target)
+                    display_target(&resource.target),
+                    display_symlink_conflict_reason(project, resource, reason),
                 ),
                 _ => {}
             }

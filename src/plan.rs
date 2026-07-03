@@ -27,6 +27,13 @@ use crate::user::{
 };
 
 #[derive(Debug, Clone)]
+pub(crate) enum SymlinkConflictReason {
+    MissingSource { current_target: Option<PathBuf> },
+    TargetUnmanaged,
+    TargetExistsNotSymlink,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum PlanStep {
     SymlinkCreate(SymlinkResource),
     SymlinkUpdate(SymlinkResource),
@@ -38,7 +45,7 @@ pub(crate) enum PlanStep {
     SymlinkNoop(SymlinkResource),
     SymlinkConflict {
         resource: SymlinkResource,
-        reason: String,
+        reason: SymlinkConflictReason,
     },
     SymlinkCandidate(SymlinkCandidate),
     PackageCreate {
@@ -106,6 +113,19 @@ pub(crate) enum PlanStep {
         capability: String,
         reason: String,
     },
+}
+
+fn missing_symlink_source_reason(resource: &SymlinkResource) -> Result<SymlinkConflictReason> {
+    let current_target = if fs::symlink_metadata(&resource.target)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        let current = fs::read_link(&resource.target)?;
+        Some(resolve_symlink_target(&resource.target, &current))
+    } else {
+        None
+    };
+    Ok(SymlinkConflictReason::MissingSource { current_target })
 }
 
 pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> Result<()> {
@@ -194,7 +214,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             } else {
                 plan.push(PlanStep::SymlinkConflict {
                     resource: resource.clone(),
-                    reason: format!("source does not exist: {}", resource.source.display()),
+                    reason: missing_symlink_source_reason(resource)?,
                 });
             }
             continue;
@@ -213,7 +233,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                 } else {
                     plan.push(PlanStep::SymlinkConflict {
                         resource: resource.clone(),
-                        reason: "target exists but is not managed".to_string(),
+                        reason: SymlinkConflictReason::TargetUnmanaged,
                     });
                 }
             }
@@ -222,7 +242,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             }
             Ok(_) => plan.push(PlanStep::SymlinkConflict {
                 resource: resource.clone(),
-                reason: "target exists and is not a symlink".to_string(),
+                reason: SymlinkConflictReason::TargetExistsNotSymlink,
             }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 plan.push(PlanStep::SymlinkCreate(resource.clone()));
