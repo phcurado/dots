@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## 0.5.0
+
+`0.5.0` adds symlink-focused workflows for importing existing files into a
+dotfiles repo and applying symlink-only changes.
+
+### Added
+
+- `dots symlink` for reviewing symlink-only changes.
+- `dots symlink apply` for applying only symlink changes.
+
+### Changed
+
+- `dots check` now suggests `dots symlink` when an explicit symlink declaration
+  can import an existing target file into the repo.
+- Symlink docs and quick start now explain the import/link flow.
+
 ## 0.4.0
 
 `0.4.0` makes providers more extensible and improves non-interactive and safety
