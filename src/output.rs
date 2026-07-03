@@ -13,7 +13,7 @@ use owo_colors::OwoColorize;
 use crate::plan::PlanStep;
 use crate::project::Project;
 use crate::state::{State, StateResource};
-use crate::symlink::home_dir;
+use crate::symlink::{SymlinkCandidate, home_dir};
 
 #[derive(Debug, Default)]
 pub(crate) struct PlanSummary {
@@ -21,6 +21,7 @@ pub(crate) struct PlanSummary {
     pub(crate) update: usize,
     pub(crate) remove: usize,
     pub(crate) conflicts: usize,
+    pub(crate) symlink_candidates: usize,
 }
 
 pub(crate) fn display_target(path: &Path) -> String {
@@ -42,6 +43,20 @@ pub(crate) fn display_source(project: &Project, path: &Path) -> String {
         return rest.display().to_string();
     }
     display_target(path)
+}
+
+pub(crate) fn print_symlink_candidates<'a>(
+    project: &Project,
+    candidates: impl IntoIterator<Item = &'a SymlinkCandidate>,
+) {
+    println!("{}", bold("Unmanaged symlink candidates:"));
+    for candidate in candidates {
+        println!("  {} {}", yellow("?"), display_target(&candidate.target));
+        println!(
+            "    can be imported to {}",
+            display_source(project, &candidate.source)
+        );
+    }
 }
 
 pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
@@ -71,6 +86,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
             | PlanStep::CapabilityConflict { .. } => summary.conflicts += 1,
+            PlanStep::SymlinkCandidate(_) => summary.symlink_candidates += 1,
             PlanStep::SymlinkNoop(_)
             | PlanStep::PackageNoop { .. }
             | PlanStep::ServiceNoop(_)
@@ -86,7 +102,12 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
 
 pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: bool) {
     let summary = summarize_plan(plan);
-    let has_changes = summary.create + summary.update + summary.remove + summary.conflicts > 0;
+    let has_changes = summary.create
+        + summary.update
+        + summary.remove
+        + summary.conflicts
+        + summary.symlink_candidates
+        > 0;
     if !has_changes {
         println!("{}", dim("No changes."));
         return;
@@ -146,6 +167,20 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
+    let has_symlink_candidates = summary.symlink_candidates > 0;
+    if has_symlink_candidates {
+        if has_capabilities || has_symlinks {
+            println!();
+        }
+        print_symlink_candidates(
+            project,
+            plan.iter().filter_map(|step| match step {
+                PlanStep::SymlinkCandidate(candidate) => Some(candidate),
+                _ => None,
+            }),
+        );
+    }
+
     let has_packages = plan.iter().any(|step| {
         matches!(
             step,
@@ -155,7 +190,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_packages {
-        if has_capabilities || has_symlinks {
+        if has_capabilities || has_symlinks || has_symlink_candidates {
             println!();
         }
         println!("{}", bold("Packages:"));
@@ -188,7 +223,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_fonts {
-        if has_capabilities || has_symlinks || has_packages {
+        if has_capabilities || has_symlinks || has_symlink_candidates || has_packages {
             println!();
         }
         println!("{}", bold("Fonts:"));
@@ -217,7 +252,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         .iter()
         .any(|step| matches!(step, PlanStep::CommandCreate(_)));
     if has_commands {
-        if has_capabilities || has_symlinks || has_packages || has_fonts {
+        if has_capabilities || has_symlinks || has_symlink_candidates || has_packages || has_fonts {
             println!();
         }
         println!("{}", bold("Commands:"));
@@ -237,7 +272,13 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_services {
-        if has_capabilities || has_symlinks || has_packages || has_fonts || has_commands {
+        if has_capabilities
+            || has_symlinks
+            || has_symlink_candidates
+            || has_packages
+            || has_fonts
+            || has_commands
+        {
             println!();
         }
         println!("{}", bold("Services:"));
@@ -280,6 +321,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
     if has_groups {
         if has_capabilities
             || has_symlinks
+            || has_symlink_candidates
             || has_packages
             || has_fonts
             || has_commands
@@ -316,6 +358,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
     if has_user {
         if has_capabilities
             || has_symlinks
+            || has_symlink_candidates
             || has_packages
             || has_fonts
             || has_commands
@@ -369,6 +412,12 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         && summary.create + summary.update + summary.remove > 0
     {
         println!("{}", dim("Run `dots apply` to apply these changes."));
+    }
+    if show_apply_hint && summary.symlink_candidates > 0 {
+        println!(
+            "{}",
+            dim("Run `dots symlink` to review unmanaged symlink candidates.")
+        );
     }
 }
 

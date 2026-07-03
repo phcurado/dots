@@ -61,7 +61,7 @@ One of the first steps in managing dotfiles is creating symlinks from those
 system paths back to your repo. Then another machine can use the same references
 without copying files by hand.
 
-For a shell config stored as `.zshrc` in the repo, add this to `dots.lua`:
+Add this to `dots.lua`:
 
 ```lua
 dots.symlink("~/.zshrc", ".zshrc")
@@ -77,13 +77,37 @@ dots check
 ```
 
 `dots check` reads the machine state declared in `dots.lua` and prints the diff.
-If `~/.zshrc` is not managed yet, it shows:
+If `.zshrc` already exists in the repo and `~/.zshrc` is not managed yet, it
+shows:
 
 ```diff
 Symlinks:
   + symlink ~/.zshrc -> .zshrc
 
 Check: 1 to create, 0 to update, 0 to destroy.
+```
+
+If `~/.zshrc` exists but `.zshrc` is not in the repo yet, it shows an unmanaged
+symlink candidate:
+
+```diff
+Unmanaged symlink candidates:
+  ? ~/.zshrc
+    can be imported to .zshrc
+
+Run `dots symlink` to review unmanaged symlink candidates.
+```
+
+Review the import:
+
+```sh
+dots symlink
+```
+
+Then let `dots` import the file into the repo and link it back:
+
+```sh
+dots symlink apply
 ```
 
 If the symlink already points to `.zshrc`, the output is:

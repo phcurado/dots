@@ -66,9 +66,42 @@ If the target directory already exists, `dots` links the children instead of
 replacing the directory. For example, if `~/.config` exists and the repo has
 `.config/nvim`, `dots` creates the link at `~/.config/nvim`.
 
-## Conflicts
+## Importing existing files
 
-`dots` does not adopt arbitrary files.
+If a declared target file already exists but the source file is missing from the
+repo, `dots check` reports an unmanaged symlink candidate:
+
+```diff
+Unmanaged symlink candidates:
+  ? ~/.zshrc
+    can be imported to .zshrc
+```
+
+Review candidates with:
+
+```sh
+dots symlink
+```
+
+Let `dots` import the files into the repo and link them back with:
+
+```sh
+dots symlink apply
+```
+
+For directory-style declarations, pass the file to import explicitly:
+
+```sh
+dots symlink ~/.config/app/new-file
+dots symlink apply ~/.config/app/new-file
+```
+
+This keeps broad declarations such as `dots.symlink("~/.config", ".config")`
+from offering every generated desktop config file. Explicit imports still respect
+`ignore` and only import files whose parent directory already exists in the repo
+source tree.
+
+## Conflicts
 
 If the target already exists and has the same contents as the repo file, `dots`
 can replace it with a symlink:

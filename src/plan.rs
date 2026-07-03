@@ -17,8 +17,9 @@ use crate::service::{
 };
 use crate::state::{State, StateResource};
 use crate::symlink::{
-    SymlinkResource, regular_file_matches, resolve_symlink_target, same_path,
-    stale_symlinks_for_declaration, state_symlink, symlink_id_for, symlink_matches,
+    SymlinkCandidate, SymlinkResource, regular_file_matches, resolve_symlink_target, same_path,
+    stale_symlinks_for_declaration, state_symlink, symlink_candidate_for_resource, symlink_id_for,
+    symlink_matches,
 };
 use crate::user::{
     SystemGroupResource, UserGroupResource, UserShellResource, current_shell, shell_matches,
@@ -39,6 +40,7 @@ pub(crate) enum PlanStep {
         resource: SymlinkResource,
         reason: String,
     },
+    SymlinkCandidate(SymlinkCandidate),
     PackageCreate {
         resource: PackageResource,
         provider: PackageProvider,
@@ -177,6 +179,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
     let mut declared = BTreeSet::new();
     let mut declared_symlink_targets = BTreeSet::new();
     let mut planned_symlink_removals = BTreeSet::new();
+    let mut symlink_candidate_targets = BTreeSet::new();
 
     for resource in &config.symlinks {
         let id = symlink_id_for(resource);
@@ -185,10 +188,15 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         let owned = state.resources.contains_key(&id);
 
         if !resource.source.exists() {
-            plan.push(PlanStep::SymlinkConflict {
-                resource: resource.clone(),
-                reason: format!("source does not exist: {}", resource.source.display()),
-            });
+            if let Some(candidate) = symlink_candidate_for_resource(resource)? {
+                symlink_candidate_targets.insert(candidate.target.clone());
+                plan.push(PlanStep::SymlinkCandidate(candidate));
+            } else {
+                plan.push(PlanStep::SymlinkConflict {
+                    resource: resource.clone(),
+                    reason: format!("source does not exist: {}", resource.source.display()),
+                });
+            }
             continue;
         }
 

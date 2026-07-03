@@ -17,16 +17,20 @@ use apply::apply_plan;
 use clap::{Parser, Subcommand};
 use config::load_config;
 use output::{
-    bold, print_plan, print_state, print_state_initialized, summarize_plan, with_spinner,
+    bold, print_plan, print_state, print_state_initialized, print_symlink_candidates,
+    summarize_plan, with_spinner,
 };
-use plan::{build_plan, refresh_state_from_system};
+use plan::{PlanStep, build_plan, refresh_state_from_system};
 use platform::selected_profile;
 use project::{Project, find_project};
 use state::{State, StateResource, load_state, save_state};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use symlink::expand_home;
+use symlink::{
+    SymlinkCandidate, apply_symlink_candidate, expand_home, symlink_candidate_for_resource,
+    symlink_candidate_for_target,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "dots", version)]
@@ -56,10 +60,29 @@ enum Command {
         #[arg(long)]
         auto_approve: bool,
     },
+    /// Import existing target files into the repo and link them back.
+    Symlink {
+        /// Existing target path to import.
+        path: Option<String>,
+        #[command(subcommand)]
+        command: Option<SymlinkCommand>,
+    },
     /// Inspect or edit local state.
     State {
         #[command(subcommand)]
         command: StateCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SymlinkCommand {
+    /// Import and link unmanaged symlink candidates.
+    Apply {
+        /// Existing target path to import.
+        path: Option<String>,
+        /// Apply without prompting for confirmation.
+        #[arg(long)]
+        auto_approve: bool,
     },
 }
 
@@ -102,6 +125,18 @@ fn main() -> Result<()> {
             confirm_apply(&plan, auto_approve)?;
             apply_plan(&plan, &mut state)?;
             save_state(&state_path, &state)?;
+        }
+        Command::Symlink { path, command } => {
+            let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
+            run_symlink_command(
+                &project,
+                &profile,
+                &state_path,
+                &mut state,
+                &plan,
+                path.as_deref(),
+                command,
+            )?;
         }
         Command::State { command } => {
             run_state_command(&project, &state_path, &mut state, command)?;
@@ -176,7 +211,7 @@ fn starter_config() -> &'static str {
 local packages = { "bat", "ripgrep" }
 
 ---- Files
--- The source path is relative to this repo and must exist.
+-- Use `dots symlink` to import existing target files into this repo.
 -- dots.symlink("~/.zshrc", ".zshrc")
 -- dots.fonts.install()
 
@@ -234,6 +269,270 @@ fn confirm_apply(plan: &[plan::PlanStep], auto_approve: bool) -> Result<()> {
     io::stdin().read_line(&mut answer)?;
     if answer.trim() != "yes" {
         bail!("apply cancelled");
+    }
+    Ok(())
+}
+
+fn run_symlink_command(
+    project: &Project,
+    profile: &str,
+    state_path: &Path,
+    state: &mut State,
+    plan: &[PlanStep],
+    path: Option<&str>,
+    command: Option<SymlinkCommand>,
+) -> Result<()> {
+    match command {
+        None => {
+            if let Some(path) = path {
+                let candidates = symlink_candidates(project, profile, plan, Some(path))?;
+                print_symlink_candidates(project, candidates.iter());
+                println!();
+                println!(
+                    "{}",
+                    output::dim(&format!(
+                        "Run `dots symlink apply {}` to apply.",
+                        shell_arg(path)
+                    ))
+                );
+                return Ok(());
+            }
+
+            let steps = symlink_review_steps(plan);
+            if steps.is_empty() {
+                println!("No symlink changes.");
+                println!(
+                    "{}",
+                    output::dim(
+                        "To import a file under a declared directory, pass its path: `dots symlink ~/.config/app/file`."
+                    )
+                );
+                return Ok(());
+            }
+
+            print_plan(project, &steps, false);
+            let summary = summarize_plan(&steps);
+            if summary.conflicts == 0
+                && summary.create + summary.update + summary.remove + summary.symlink_candidates > 0
+            {
+                println!("{}", output::dim("Run `dots symlink apply` to apply."));
+            }
+            Ok(())
+        }
+        Some(SymlinkCommand::Apply {
+            path: apply_path,
+            auto_approve,
+        }) => {
+            if apply_path.is_some() || path.is_some() {
+                let candidates =
+                    symlink_candidates(project, profile, plan, apply_path.as_deref().or(path))?;
+                return apply_symlink_candidates(
+                    project,
+                    state_path,
+                    state,
+                    candidates,
+                    auto_approve,
+                );
+            }
+
+            apply_symlink_plan(project, state_path, state, plan, auto_approve)
+        }
+    }
+}
+
+fn symlink_review_steps(plan: &[PlanStep]) -> Vec<PlanStep> {
+    plan.iter()
+        .filter(|step| {
+            matches!(
+                step,
+                PlanStep::SymlinkCreate(_)
+                    | PlanStep::SymlinkUpdate(_)
+                    | PlanStep::SymlinkRemove { .. }
+                    | PlanStep::SymlinkConflict { .. }
+                    | PlanStep::SymlinkCandidate(_)
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+fn symlink_apply_steps(plan: &[PlanStep]) -> Vec<PlanStep> {
+    plan.iter()
+        .filter(|step| {
+            matches!(
+                step,
+                PlanStep::SymlinkCreate(_)
+                    | PlanStep::SymlinkUpdate(_)
+                    | PlanStep::SymlinkRemove { .. }
+                    | PlanStep::SymlinkConflict { .. }
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+fn symlink_candidates(
+    project: &Project,
+    profile: &str,
+    plan: &[PlanStep],
+    path: Option<&str>,
+) -> Result<Vec<SymlinkCandidate>> {
+    if let Some(path) = path {
+        return Ok(vec![symlink_candidate_for_path(project, profile, path)?]);
+    }
+
+    Ok(plan
+        .iter()
+        .filter_map(|step| match step {
+            PlanStep::SymlinkCandidate(candidate) => Some(candidate.clone()),
+            _ => None,
+        })
+        .collect())
+}
+
+fn symlink_candidate_for_path(
+    project: &Project,
+    profile: &str,
+    path: &str,
+) -> Result<SymlinkCandidate> {
+    let target = expand_home(path);
+    let config = load_config(project, profile)?;
+
+    for resource in &config.symlinks {
+        if resource.target == target {
+            if let Some(candidate) = symlink_candidate_for_resource(resource)? {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    for declaration in &config.symlink_declarations {
+        if let Some(candidate) = symlink_candidate_for_target(declaration, &target)? {
+            return Ok(candidate);
+        }
+    }
+
+    bail!(
+        "no unmanaged symlink candidate for {}",
+        output::display_target(&target)
+    )
+}
+
+fn apply_symlink_plan(
+    project: &Project,
+    state_path: &Path,
+    state: &mut State,
+    plan: &[PlanStep],
+    auto_approve: bool,
+) -> Result<()> {
+    let apply_steps = symlink_apply_steps(plan);
+    let candidates = symlink_candidates(project, "", plan, None)?;
+    let review_steps = symlink_review_steps(plan);
+    if review_steps.is_empty() {
+        println!("No symlink changes.");
+        println!(
+            "{}",
+            output::dim(
+                "To import a file under a declared directory, pass its path: `dots symlink apply ~/.config/app/file`."
+            )
+        );
+        return Ok(());
+    }
+
+    print_plan(project, &review_steps, false);
+    let summary = summarize_plan(&review_steps);
+    if summary.conflicts > 0 {
+        bail!(
+            "symlink plan has {} conflict(s); refusing to apply",
+            summary.conflicts
+        );
+    }
+    confirm_symlink_apply(
+        summary.create + summary.update + summary.remove + summary.symlink_candidates,
+        auto_approve,
+    )?;
+
+    apply_plan(&apply_steps, state)?;
+    if !candidates.is_empty() {
+        println!();
+        println!("{}", bold("Symlinking:"));
+        for candidate in &candidates {
+            output::apply_with_status(
+                "Importing",
+                "Import",
+                &format!("symlink.{}", output::display_target(&candidate.target)),
+                || apply_symlink_candidate(candidate, state),
+            )?;
+        }
+        println!();
+        println!(
+            "{} {} imported.",
+            bold("Symlink complete:"),
+            candidates.len()
+        );
+    }
+    save_state(state_path, state)?;
+
+    Ok(())
+}
+
+fn apply_symlink_candidates(
+    project: &Project,
+    state_path: &Path,
+    state: &mut State,
+    candidates: Vec<SymlinkCandidate>,
+    auto_approve: bool,
+) -> Result<()> {
+    if candidates.is_empty() {
+        println!("No unmanaged symlink candidates.");
+        return Ok(());
+    }
+
+    print_symlink_candidates(project, candidates.iter());
+    let count = candidates.len();
+    confirm_symlink_apply(count, auto_approve)?;
+    println!();
+    println!("{}", bold("Symlinking:"));
+    for candidate in &candidates {
+        output::apply_with_status(
+            "Importing",
+            "Import",
+            &format!("symlink.{}", output::display_target(&candidate.target)),
+            || apply_symlink_candidate(candidate, state),
+        )?;
+    }
+    save_state(state_path, state)?;
+    println!();
+    println!("{} {} imported.", bold("Symlink complete:"), count);
+
+    Ok(())
+}
+
+fn shell_arg(value: &str) -> String {
+    if value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "_+-=./~:".contains(character))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn confirm_symlink_apply(count: usize, auto_approve: bool) -> Result<()> {
+    if auto_approve || count == 0 {
+        return Ok(());
+    }
+
+    println!();
+    println!("Type 'yes' to import and link these files.");
+    print!("Symlink? ");
+    io::stdout().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if answer.trim() != "yes" {
+        bail!("symlink cancelled");
     }
     Ok(())
 }

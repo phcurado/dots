@@ -16,6 +16,12 @@ pub(crate) struct SymlinkResource {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct SymlinkCandidate {
+    pub(crate) target: PathBuf,
+    pub(crate) source: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct SymlinkDeclaration {
     pub(crate) target: PathBuf,
     pub(crate) source: PathBuf,
@@ -191,6 +197,69 @@ pub(crate) fn stale_symlinks_for_declaration(
     Ok(resources)
 }
 
+pub(crate) fn symlink_candidate_for_resource(
+    resource: &SymlinkResource,
+) -> Result<Option<SymlinkCandidate>> {
+    if resource.source.exists() {
+        return Ok(None);
+    }
+    let Ok(metadata) = fs::symlink_metadata(&resource.target) else {
+        return Ok(None);
+    };
+    if metadata.file_type().is_symlink()
+        || !resource
+            .source
+            .parent()
+            .map(|parent| parent.is_dir())
+            .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    Ok(Some(SymlinkCandidate {
+        target: resource.target.clone(),
+        source: resource.source.clone(),
+    }))
+}
+
+pub(crate) fn symlink_candidate_for_target(
+    declaration: &SymlinkDeclaration,
+    target: &Path,
+) -> Result<Option<SymlinkCandidate>> {
+    let Ok(relative) = target.strip_prefix(&declaration.target) else {
+        return Ok(None);
+    };
+    if relative.as_os_str().is_empty() {
+        return Ok(None);
+    }
+
+    let ignore = build_ignore_set(&declaration.ignore)?;
+    if ignore.is_match(relative) {
+        return Ok(None);
+    }
+
+    let source = declaration.source.join(relative);
+    if source.exists()
+        || !source
+            .parent()
+            .map(|parent| parent.is_dir())
+            .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+
+    let Ok(metadata) = fs::symlink_metadata(target) else {
+        return Ok(None);
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Ok(None);
+    }
+
+    Ok(Some(SymlinkCandidate {
+        target: target.to_path_buf(),
+        source,
+    }))
+}
+
 fn collect_stale_symlinks(
     target_root: &Path,
     source_root: &Path,
@@ -323,6 +392,45 @@ pub(crate) fn state_symlink(resource: &SymlinkResource) -> StateResource {
 
 pub(crate) fn symlink_id_for(resource: &SymlinkResource) -> String {
     format!("symlink:{}", resource.target.display())
+}
+
+pub(crate) fn apply_symlink_candidate(
+    candidate: &SymlinkCandidate,
+    state: &mut State,
+) -> Result<()> {
+    let Some(parent) = candidate.source.parent() else {
+        bail!("source path has no parent: {}", candidate.source.display());
+    };
+    if !parent.is_dir() {
+        bail!("source parent does not exist: {}", parent.display());
+    }
+    if candidate.source.exists() {
+        bail!("source already exists: {}", candidate.source.display());
+    }
+
+    let metadata = fs::symlink_metadata(&candidate.target)
+        .with_context(|| format!("target does not exist: {}", candidate.target.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!(
+            "target is not a regular file: {}",
+            candidate.target.display()
+        );
+    }
+
+    fs::rename(&candidate.target, &candidate.source).with_context(|| {
+        format!(
+            "failed to import {} to {}",
+            candidate.target.display(),
+            candidate.source.display()
+        )
+    })?;
+    apply_symlink(
+        &SymlinkResource {
+            target: candidate.target.clone(),
+            source: candidate.source.clone(),
+        },
+        state,
+    )
 }
 
 pub(crate) fn apply_symlink(resource: &SymlinkResource, state: &mut State) -> Result<()> {

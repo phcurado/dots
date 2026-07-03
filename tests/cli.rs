@@ -68,6 +68,58 @@ fn check_prints_symlink_and_package_changes() {
 }
 
 #[test]
+fn symlink_imports_existing_target_file() {
+    let root = temp_dir("cli-symlink");
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(home.join(".zshrc"), "export EDITOR=nvim\n").unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.symlink("~/.zshrc", ".zshrc")"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Unmanaged symlink candidates:"));
+    assert!(stdout.contains("? ~/.zshrc"));
+    assert!(stdout.contains("can be imported to .zshrc"));
+    assert!(stdout.contains("Run `dots symlink` to review unmanaged symlink candidates."));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("symlink")
+        .arg("apply")
+        .arg("--auto-approve")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        fs::read_to_string(root.join(".zshrc")).unwrap(),
+        "export EDITOR=nvim\n"
+    );
+    assert!(
+        fs::symlink_metadata(home.join(".zshrc"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_link(home.join(".zshrc")).unwrap(),
+        Path::new("../.zshrc")
+    );
+}
+
+#[test]
 fn default_command_checks() {
     let root = temp_dir("cli-default-check");
     let home = root.join("home");

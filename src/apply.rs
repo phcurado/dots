@@ -183,7 +183,8 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
             )?,
             PlanStep::UserShellNoop | PlanStep::SystemGroupNoop(_) | PlanStep::UserGroupNoop(_) => {
             }
-            PlanStep::SymlinkConflict { .. }
+            PlanStep::SymlinkCandidate(_)
+            | PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
             | PlanStep::FontConflict { .. }
