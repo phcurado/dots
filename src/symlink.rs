@@ -332,8 +332,8 @@ pub(crate) fn resolve_symlink_target(target: &Path, link: &Path) -> PathBuf {
 }
 
 fn relative_path(from_dir: &Path, to: &Path) -> PathBuf {
-    let from_dir = normalize_path(from_dir);
-    let to = normalize_path(to);
+    let from_dir = fs::canonicalize(from_dir).unwrap_or_else(|_| normalize_path(from_dir));
+    let to = fs::canonicalize(to).unwrap_or_else(|_| normalize_path(to));
     if from_dir.is_absolute() != to.is_absolute() {
         return to;
     }
