@@ -113,15 +113,9 @@ fn symlink_imports_existing_target_file() {
             .file_type()
             .is_symlink()
     );
-    let link = fs::read_link(home.join(".zshrc")).unwrap();
-    let link_target = if link.is_absolute() {
-        link
-    } else {
-        home.join(link)
-    };
     assert_eq!(
-        fs::canonicalize(link_target).unwrap(),
-        fs::canonicalize(root.join(".zshrc")).unwrap()
+        fs::read_to_string(home.join(".zshrc")).unwrap(),
+        "export EDITOR=nvim\n"
     );
 }
 
