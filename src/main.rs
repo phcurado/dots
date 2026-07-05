@@ -255,12 +255,15 @@ fn confirm_apply(plan: &[plan::PlanStep], auto_approve: bool) -> Result<()> {
     let summary = summarize_plan(plan);
     if auto_approve
         || summary.conflicts > 0
-        || summary.create + summary.update + summary.remove == 0
+        || summary.create + summary.update + summary.remove + summary.symlink_candidates == 0
     {
         return Ok(());
     }
 
     println!();
+    if summary.symlink_candidates > 0 {
+        println!("This will import files into the repo and link them back.");
+    }
     println!("Type 'yes' to apply these changes.");
     print!("Apply? ");
     io::stdout().flush()?;
@@ -364,6 +367,7 @@ fn symlink_apply_steps(plan: &[PlanStep]) -> Vec<PlanStep> {
                 PlanStep::SymlinkCreate(_)
                     | PlanStep::SymlinkUpdate(_)
                     | PlanStep::SymlinkRemove { .. }
+                    | PlanStep::SymlinkCandidate(_)
                     | PlanStep::SymlinkConflict { .. }
             )
         })
@@ -426,7 +430,6 @@ fn apply_symlink_plan(
     auto_approve: bool,
 ) -> Result<()> {
     let apply_steps = symlink_apply_steps(plan);
-    let candidates = symlink_candidates(project, "", plan, None)?;
     let review_steps = symlink_review_steps(plan);
     if review_steps.is_empty() {
         println!("No symlink changes.");
@@ -453,24 +456,6 @@ fn apply_symlink_plan(
     )?;
 
     apply_plan(&apply_steps, state)?;
-    if !candidates.is_empty() {
-        println!();
-        println!("{}", bold("Symlinking:"));
-        for candidate in &candidates {
-            output::apply_with_status(
-                "Importing",
-                "Import",
-                &format!("symlink.{}", output::display_target(&candidate.target)),
-                || apply_symlink_candidate(candidate, state),
-            )?;
-        }
-        println!();
-        println!(
-            "{} {} imported.",
-            bold("Symlink complete:"),
-            candidates.len()
-        );
-    }
     save_state(state_path, state)?;
 
     Ok(())

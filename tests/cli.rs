@@ -88,13 +88,12 @@ fn symlink_imports_existing_target_file() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Unmanaged symlink candidates:"));
-    assert!(stdout.contains("? ~/.zshrc"));
-    assert!(stdout.contains("can be imported to .zshrc"));
-    assert!(stdout.contains("Run `dots symlink` to review unmanaged symlink candidates."));
+    assert!(stdout.contains("Symlinks:"));
+    assert!(stdout.contains("+ import ~/.zshrc -> .zshrc"));
+    assert!(stdout.contains("Check: 1 to import, 0 to create, 0 to update, 0 to destroy."));
+    assert!(stdout.contains("Run `dots apply` to apply these changes."));
 
     let output = Command::new(env!("CARGO_BIN_EXE_dots"))
-        .arg("symlink")
         .arg("apply")
         .arg("--auto-approve")
         .current_dir(&root)

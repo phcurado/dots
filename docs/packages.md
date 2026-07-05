@@ -27,6 +27,11 @@ The built-in providers are:
 - `yay`
 - `paru`
 - `apt`
+- `dnf`
+- `zypper`
+- `apk`
+- `flatpak`
+- `snap`
 - `brew`
 - `brew-cask`, exposed as `dots.brew.cask(...)`
 - `brew-tap`, exposed as `dots.brew.tap(...)`

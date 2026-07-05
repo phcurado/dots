@@ -87,27 +87,19 @@ Symlinks:
 Check: 1 to create, 0 to update, 0 to destroy.
 ```
 
-If `~/.zshrc` exists but `.zshrc` is not in the repo yet, it shows an unmanaged
-symlink candidate:
+If `~/.zshrc` exists but `.zshrc` is not in the repo yet, it shows an import:
 
 ```diff
-Unmanaged symlink candidates:
-  ? ~/.zshrc
-    can be imported to .zshrc
+Symlinks:
+  + import ~/.zshrc -> .zshrc
 
-Run `dots symlink` to review unmanaged symlink candidates.
-```
-
-Review the import:
-
-```sh
-dots symlink
+Check: 1 to import, 0 to create, 0 to update, 0 to destroy.
 ```
 
 Then let `dots` import the file into the repo and link it back:
 
 ```sh
-dots symlink apply
+dots apply
 ```
 
 If the symlink already points to `.zshrc`, the output is:

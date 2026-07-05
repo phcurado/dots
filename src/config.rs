@@ -459,10 +459,25 @@ fn load_builtin_lua(lua: &Lua) -> Result<()> {
         ("dots package paru", include_str!("lua/packages/paru.lua")),
         ("dots package yay", include_str!("lua/packages/yay.lua")),
         ("dots package apt", include_str!("lua/packages/apt.lua")),
+        ("dots package dnf", include_str!("lua/packages/dnf.lua")),
+        (
+            "dots package zypper",
+            include_str!("lua/packages/zypper.lua"),
+        ),
+        ("dots package apk", include_str!("lua/packages/apk.lua")),
+        (
+            "dots package flatpak",
+            include_str!("lua/packages/flatpak.lua"),
+        ),
+        ("dots package snap", include_str!("lua/packages/snap.lua")),
         ("dots package brew", include_str!("lua/packages/brew.lua")),
         (
             "dots service systemd",
             include_str!("lua/services/systemd.lua"),
+        ),
+        (
+            "dots service openrc",
+            include_str!("lua/services/openrc.lua"),
         ),
         ("dots service brew", include_str!("lua/services/brew.lua")),
     ] {
@@ -791,6 +806,35 @@ mod tests {
     }
 
     #[test]
+    fn loads_additional_builtin_package_providers() {
+        let project = temp_project(
+            r#"
+            dots.dnf.install({ "fd-find" })
+            dots.zypper.install({ "fd" })
+            dots.apk.install({ "ripgrep" })
+            dots.flatpak.install({ "org.mozilla.firefox" })
+            dots.snap.install({ "firefox" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        for provider in ["dnf", "zypper", "apk", "flatpak", "snap"] {
+            assert!(config.package_providers.contains_key(provider));
+            assert!(
+                config
+                    .packages
+                    .iter()
+                    .any(|package| package.provider == provider)
+            );
+        }
+        assert_eq!(
+            config.package_providers["flatpak"].remove,
+            "flatpak uninstall --assumeyes --noninteractive \"$DOTS_PACKAGE\""
+        );
+    }
+
+    #[test]
     fn duplicate_packages_are_deduped() {
         let project = temp_project(r#"dots.paru.install({ "bat", "bat" })"#);
 
@@ -889,6 +933,37 @@ mod tests {
             service.provider == "brew-service"
                 && service.action == ServiceAction::Start
                 && service.name == "sketchybar"
+        }));
+    }
+
+    #[test]
+    fn loads_openrc_services() {
+        let project = temp_project(
+            r#"
+            dots.openrc.enable({ "docker" })
+            dots.openrc.start({ "docker" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(config.service_providers.contains_key("openrc"));
+        let provider = &config.service_providers["openrc"];
+        assert_eq!(provider.list_started, None);
+        assert_eq!(
+            provider.list_enabled.as_deref(),
+            Some("rc-update show default | awk '{ print $1 }'")
+        );
+        assert_eq!(config.services.len(), 2);
+        assert!(config.services.iter().any(|service| {
+            service.provider == "openrc"
+                && service.action == ServiceAction::Enable
+                && service.name == "docker"
+        }));
+        assert!(config.services.iter().any(|service| {
+            service.provider == "openrc"
+                && service.action == ServiceAction::Start
+                && service.name == "docker"
         }));
     }
 

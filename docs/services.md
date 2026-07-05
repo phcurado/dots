@@ -4,8 +4,8 @@ A service is a background process managed by the operating system. It might be a
 database, a sync daemon, a VPN client, Docker, or another program that should
 keep running without being started by hand.
 
-On Linux, `dots` supports systemd services. On macOS, it supports services
-managed by Homebrew.
+On Linux, `dots` supports systemd and OpenRC services. On macOS, it supports
+services managed by Homebrew.
 
 ```lua
 if dots.platform.family == "arch" then
@@ -42,6 +42,18 @@ If those declarations are removed later, `dots check` shows the inverse action:
 
 - `enable` becomes `disable`
 - `start` becomes `stop`
+
+## OpenRC
+
+Use `dots.openrc` on distros that boot with OpenRC, such as Alpine:
+
+```lua
+dots.openrc.enable({ "docker" })
+dots.openrc.start({ "docker" })
+```
+
+`enable` adds the service to the `default` runlevel with `rc-update add`.
+Removing declarations shows the inverse action, the same as systemd.
 
 ## Homebrew services
 

@@ -75,11 +75,12 @@ pub(crate) fn print_symlink_candidates<'a>(
     project: &Project,
     candidates: impl IntoIterator<Item = &'a SymlinkCandidate>,
 ) {
-    println!("{}", bold("Unmanaged symlink candidates:"));
+    println!("{}", bold("Symlinks:"));
     for candidate in candidates {
-        println!("  {} {}", yellow("?"), display_target(&candidate.target));
         println!(
-            "    can be imported to {}",
+            "  {} import {} -> {}",
+            green("+"),
+            display_target(&candidate.target),
             display_source(project, &candidate.source)
         );
     }
@@ -158,6 +159,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
                 | PlanStep::SymlinkUpdate(_)
                 | PlanStep::SymlinkRemove { .. }
                 | PlanStep::SymlinkConflict { .. }
+                | PlanStep::SymlinkCandidate(_)
         )
     });
     if has_symlinks {
@@ -189,24 +191,18 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
                     display_target(&resource.target),
                     display_symlink_conflict_reason(project, resource, reason),
                 ),
+                PlanStep::SymlinkCandidate(candidate) => println!(
+                    "  {} import {} -> {}",
+                    green("+"),
+                    display_target(&candidate.target),
+                    display_source(project, &candidate.source),
+                ),
                 _ => {}
             }
         }
     }
 
     let has_symlink_candidates = summary.symlink_candidates > 0;
-    if has_symlink_candidates {
-        if has_capabilities || has_symlinks {
-            println!();
-        }
-        print_symlink_candidates(
-            project,
-            plan.iter().filter_map(|step| match step {
-                PlanStep::SymlinkCandidate(candidate) => Some(candidate),
-                _ => None,
-            }),
-        );
-    }
 
     let has_packages = plan.iter().any(|step| {
         matches!(
@@ -421,8 +417,16 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
     }
 
     println!();
+    let import_text = if summary.symlink_candidates > 0 {
+        format!(
+            "{} to import, ",
+            green(&summary.symlink_candidates.to_string())
+        )
+    } else {
+        String::new()
+    };
     println!(
-        "{} {} to create, {} to update, {} to destroy{}",
+        "{} {import_text}{} to create, {} to update, {} to destroy{}",
         bold("Check:"),
         green(&summary.create.to_string()),
         yellow(&summary.update.to_string()),
@@ -436,15 +440,9 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
 
     if show_apply_hint
         && summary.conflicts == 0
-        && summary.create + summary.update + summary.remove > 0
+        && summary.create + summary.update + summary.remove + summary.symlink_candidates > 0
     {
         println!("{}", dim("Run `dots apply` to apply these changes."));
-    }
-    if show_apply_hint && summary.symlink_candidates > 0 {
-        println!(
-            "{}",
-            dim("Run `dots symlink` to review unmanaged symlink candidates.")
-        );
     }
 }
 

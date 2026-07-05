@@ -80,6 +80,21 @@ fn linux_family(os_release: &BTreeMap<String, String>) -> String {
             .any(|value| value == "debian" || value == "ubuntu")
     {
         "debian".to_string()
+    } else if id == "fedora"
+        || id == "rhel"
+        || id == "centos"
+        || id_like
+            .split_whitespace()
+            .any(|value| value == "fedora" || value == "rhel" || value == "centos")
+    {
+        "fedora".to_string()
+    } else if id == "sles"
+        || id.starts_with("opensuse")
+        || id_like
+            .split_whitespace()
+            .any(|value| value == "suse" || value == "opensuse")
+    {
+        "suse".to_string()
     } else {
         id.to_string()
     }
@@ -143,6 +158,28 @@ mod tests {
                 &os_release(&[("ID", "pop"), ("ID_LIKE", "ubuntu debian")])
             ),
             "debian"
+        );
+        assert_eq!(
+            platform_family("linux", &os_release(&[("ID", "fedora")])),
+            "fedora"
+        );
+        assert_eq!(
+            platform_family(
+                "linux",
+                &os_release(&[("ID", "rocky"), ("ID_LIKE", "rhel centos fedora")])
+            ),
+            "fedora"
+        );
+        assert_eq!(
+            platform_family(
+                "linux",
+                &os_release(&[("ID", "opensuse-tumbleweed"), ("ID_LIKE", "opensuse suse")])
+            ),
+            "suse"
+        );
+        assert_eq!(
+            platform_family("linux", &os_release(&[("ID", "alpine")])),
+            "alpine"
         );
     }
 

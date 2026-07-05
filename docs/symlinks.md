@@ -69,24 +69,17 @@ replacing the directory. For example, if `~/.config` exists and the repo has
 ## Importing existing files
 
 If a declared target file already exists but the source file is missing from the
-repo, `dots check` reports an unmanaged symlink candidate:
+repo, `dots check` reports an import:
 
 ```diff
-Unmanaged symlink candidates:
-  ? ~/.zshrc
-    can be imported to .zshrc
-```
-
-Review candidates with:
-
-```sh
-dots symlink
+Symlinks:
+  + import ~/.zshrc -> .zshrc
 ```
 
 Let `dots` import the files into the repo and link them back with:
 
 ```sh
-dots symlink apply
+dots apply
 ```
 
 For directory-style declarations, pass the file to import explicitly:

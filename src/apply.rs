@@ -16,7 +16,9 @@ use crate::plan::{
 };
 use crate::service::{ServiceProvider, ServiceResource, service_apply, service_remove};
 use crate::state::{State, StateResource};
-use crate::symlink::{apply_symlink, remove_symlink, state_symlink, symlink_id_for};
+use crate::symlink::{
+    apply_symlink, apply_symlink_candidate, remove_symlink, state_symlink, symlink_id_for,
+};
 use crate::user::{
     SystemGroupResource, UserGroupResource, UserShellResource, apply_group, apply_shell,
     create_group, remove_group, remove_user_from_group,
@@ -33,7 +35,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
 
     let tracked = track_noop_resources(plan, state);
 
-    if summary.create + summary.update + summary.remove == 0 {
+    if summary.create + summary.update + summary.remove + summary.symlink_candidates == 0 {
         if tracked > 0 {
             println!();
             println!("{} {} resources tracked.", bold("State updated:"), tracked);
@@ -72,6 +74,12 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     || remove_symlink(&resource, state),
                 )?
             }
+            PlanStep::SymlinkCandidate(candidate) => apply_with_status(
+                "Importing",
+                "Import",
+                &format!("symlink.{}", display_target(&candidate.target)),
+                || apply_symlink_candidate(candidate, state),
+            )?,
             PlanStep::PackageCreate { resource, provider } => apply_with_status(
                 "Installing",
                 "Install",
@@ -183,8 +191,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
             )?,
             PlanStep::UserShellNoop | PlanStep::SystemGroupNoop(_) | PlanStep::UserGroupNoop(_) => {
             }
-            PlanStep::SymlinkCandidate(_)
-            | PlanStep::SymlinkConflict { .. }
+            PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
             | PlanStep::FontConflict { .. }
@@ -196,8 +203,9 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
 
     println!();
     println!(
-        "{} {} created, {} updated, {} destroyed.",
+        "{} {} imported, {} created, {} updated, {} destroyed.",
         bold("Apply complete:"),
+        green(&summary.symlink_candidates.to_string()),
         green(&summary.create.to_string()),
         yellow(&summary.update.to_string()),
         red(&summary.remove.to_string()),
@@ -367,6 +375,7 @@ fn is_apply_step(step: &PlanStep) -> bool {
         PlanStep::SymlinkCreate(_)
             | PlanStep::SymlinkUpdate(_)
             | PlanStep::SymlinkRemove { .. }
+            | PlanStep::SymlinkCandidate(_)
             | PlanStep::PackageCreate { .. }
             | PlanStep::PackageRemove { .. }
             | PlanStep::ServiceCreate { .. }
@@ -400,6 +409,9 @@ fn step_id(step: &PlanStep) -> Option<String> {
         PlanStep::FontRemove { target, .. } => Some(format!("font:{}", target.display())),
         PlanStep::SymlinkCreate(resource) | PlanStep::SymlinkUpdate(resource) => {
             Some(symlink_id_for(resource))
+        }
+        PlanStep::SymlinkCandidate(candidate) => {
+            Some(format!("symlink:{}", candidate.target.display()))
         }
         PlanStep::SymlinkRemove { target, .. } => Some(format!("symlink:{}", target.display())),
         PlanStep::UserShellUpdate { resource, .. } => Some(format!("user-shell:{}", resource.name)),

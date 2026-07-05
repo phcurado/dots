@@ -38,9 +38,16 @@ Available fields:
 `system` uses the Nix-style shape `<arch>-<os>`, such as `x86_64-linux` or
 `aarch64-darwin`.
 
-On Linux, `distro` and `family` come from `/etc/os-release`. Arch uses
-`family = "arch"`; Debian and Ubuntu use `family = "debian"`; macOS uses
-`family = "darwin"`.
+`family` values:
+
+| Distros                           | `family` | Packages      |
+| --------------------------------- | -------- | ------------- |
+| Arch, EndeavourOS                 | `arch`   | `dots.pacman` |
+| Debian, Ubuntu, Pop!_OS           | `debian` | `dots.apt`    |
+| Fedora, RHEL, CentOS, Rocky, Alma | `fedora` | `dots.dnf`    |
+| openSUSE, SLES                    | `suse`   | `dots.zypper` |
+| Alpine                            | `alpine` | `dots.apk`    |
+| macOS                             | `darwin` | `dots.brew`   |
 
 ## Profiles
 

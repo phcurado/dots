@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## Unreleased
+
+### Added
+
+- Package providers: `dnf`, `zypper`, `apk`, `flatpak`, and `snap`.
+- Service provider: `openrc`, exposed as `dots.openrc.start(...)` and
+  `dots.openrc.enable(...)`.
+- Platform families `fedora` (Fedora, RHEL, CentOS, Rocky, Alma) and `suse`
+  (openSUSE, SLES).
+
+### Changed
+
+- Explicit file imports shown by `dots check` are now applied by `dots apply`.
+
 ## 0.5.1
 
 `0.5.1` improves diagnostics for symlink declarations whose source file is
