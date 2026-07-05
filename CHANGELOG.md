@@ -1,6 +1,8 @@
 # CHANGELOG
 
-## Unreleased
+## 0.6.0
+
+`0.6.0` expands built-in providers and makes declared symlink imports part of the normal `dots check` / `dots apply` flow.
 
 ### Added
 
