@@ -206,7 +206,8 @@ pub(crate) fn symlink_candidate_for_resource(
     let Ok(metadata) = fs::symlink_metadata(&resource.target) else {
         return Ok(None);
     };
-    if metadata.file_type().is_symlink()
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
         || !resource
             .source
             .parent()
@@ -405,7 +406,13 @@ pub(crate) fn apply_symlink_candidate(
         bail!("source parent does not exist: {}", parent.display());
     }
     if candidate.source.exists() {
-        bail!("source already exists: {}", candidate.source.display());
+        return apply_symlink(
+            &SymlinkResource {
+                target: candidate.target.clone(),
+                source: candidate.source.clone(),
+            },
+            state,
+        );
     }
 
     let metadata = fs::symlink_metadata(&candidate.target)
@@ -417,13 +424,7 @@ pub(crate) fn apply_symlink_candidate(
         );
     }
 
-    fs::rename(&candidate.target, &candidate.source).with_context(|| {
-        format!(
-            "failed to import {} to {}",
-            candidate.target.display(),
-            candidate.source.display()
-        )
-    })?;
+    import_file(&candidate.target, &candidate.source)?;
     apply_symlink(
         &SymlinkResource {
             target: candidate.target.clone(),
@@ -431,6 +432,32 @@ pub(crate) fn apply_symlink_candidate(
         },
         state,
     )
+}
+
+fn import_file(target: &Path, source: &Path) -> Result<()> {
+    match fs::rename(target, source) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            fs::copy(target, source).with_context(|| {
+                format!(
+                    "failed to import {} to {}",
+                    target.display(),
+                    source.display()
+                )
+            })?;
+            fs::remove_file(target).with_context(|| {
+                format!("failed to remove imported target {}", target.display())
+            })?;
+            Ok(())
+        }
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to import {} to {}",
+                target.display(),
+                source.display()
+            )
+        }),
+    }
 }
 
 pub(crate) fn apply_symlink(resource: &SymlinkResource, state: &mut State) -> Result<()> {

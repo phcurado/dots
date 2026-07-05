@@ -24,6 +24,12 @@ pub(crate) struct PlanSummary {
     pub(crate) symlink_candidates: usize,
 }
 
+impl PlanSummary {
+    pub(crate) fn total_changes(&self) -> usize {
+        self.create + self.update + self.remove + self.symlink_candidates
+    }
+}
+
 pub(crate) fn display_target(path: &Path) -> String {
     let home = home_dir();
     if path == home {
@@ -129,12 +135,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
 
 pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: bool) {
     let summary = summarize_plan(plan);
-    let has_changes = summary.create
-        + summary.update
-        + summary.remove
-        + summary.conflicts
-        + summary.symlink_candidates
-        > 0;
+    let has_changes = summary.total_changes() + summary.conflicts > 0;
     if !has_changes {
         println!("{}", dim("No changes."));
         return;
@@ -202,8 +203,6 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
-    let has_symlink_candidates = summary.symlink_candidates > 0;
-
     let has_packages = plan.iter().any(|step| {
         matches!(
             step,
@@ -213,7 +212,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_packages {
-        if has_capabilities || has_symlinks || has_symlink_candidates {
+        if has_capabilities || has_symlinks {
             println!();
         }
         println!("{}", bold("Packages:"));
@@ -246,7 +245,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_fonts {
-        if has_capabilities || has_symlinks || has_symlink_candidates || has_packages {
+        if has_capabilities || has_symlinks || has_packages {
             println!();
         }
         println!("{}", bold("Fonts:"));
@@ -275,7 +274,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         .iter()
         .any(|step| matches!(step, PlanStep::CommandCreate(_)));
     if has_commands {
-        if has_capabilities || has_symlinks || has_symlink_candidates || has_packages || has_fonts {
+        if has_capabilities || has_symlinks || has_packages || has_fonts {
             println!();
         }
         println!("{}", bold("Commands:"));
@@ -295,13 +294,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_services {
-        if has_capabilities
-            || has_symlinks
-            || has_symlink_candidates
-            || has_packages
-            || has_fonts
-            || has_commands
-        {
+        if has_capabilities || has_symlinks || has_packages || has_fonts || has_commands {
             println!();
         }
         println!("{}", bold("Services:"));
@@ -344,7 +337,6 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
     if has_groups {
         if has_capabilities
             || has_symlinks
-            || has_symlink_candidates
             || has_packages
             || has_fonts
             || has_commands
@@ -381,7 +373,6 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
     if has_user {
         if has_capabilities
             || has_symlinks
-            || has_symlink_candidates
             || has_packages
             || has_fonts
             || has_commands
@@ -438,10 +429,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     );
 
-    if show_apply_hint
-        && summary.conflicts == 0
-        && summary.create + summary.update + summary.remove + summary.symlink_candidates > 0
-    {
+    if show_apply_hint && summary.conflicts == 0 && summary.total_changes() > 0 {
         println!("{}", dim("Run `dots apply` to apply these changes."));
     }
 }

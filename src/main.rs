@@ -253,10 +253,7 @@ local packages = { "bat", "ripgrep" }
 
 fn confirm_apply(plan: &[plan::PlanStep], auto_approve: bool) -> Result<()> {
     let summary = summarize_plan(plan);
-    if auto_approve
-        || summary.conflicts > 0
-        || summary.create + summary.update + summary.remove + summary.symlink_candidates == 0
-    {
+    if auto_approve || summary.conflicts > 0 || summary.total_changes() == 0 {
         return Ok(());
     }
 
@@ -315,9 +312,7 @@ fn run_symlink_command(
 
             print_plan(project, &steps, false);
             let summary = summarize_plan(&steps);
-            if summary.conflicts == 0
-                && summary.create + summary.update + summary.remove + summary.symlink_candidates > 0
-            {
+            if summary.conflicts == 0 && summary.total_changes() > 0 {
                 println!("{}", output::dim("Run `dots symlink apply` to apply."));
             }
             Ok(())
@@ -450,10 +445,7 @@ fn apply_symlink_plan(
             summary.conflicts
         );
     }
-    confirm_symlink_apply(
-        summary.create + summary.update + summary.remove + summary.symlink_candidates,
-        auto_approve,
-    )?;
+    confirm_symlink_apply(summary.total_changes(), auto_approve)?;
 
     apply_plan(&apply_steps, state)?;
     save_state(state_path, state)?;

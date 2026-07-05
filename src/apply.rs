@@ -35,7 +35,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
 
     let tracked = track_noop_resources(plan, state);
 
-    if summary.create + summary.update + summary.remove + summary.symlink_candidates == 0 {
+    if summary.total_changes() == 0 {
         if tracked > 0 {
             println!();
             println!("{} {} resources tracked.", bold("State updated:"), tracked);
@@ -202,10 +202,17 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
     }
 
     println!();
+    let import_text = if summary.symlink_candidates > 0 {
+        format!(
+            "{} imported, ",
+            green(&summary.symlink_candidates.to_string())
+        )
+    } else {
+        String::new()
+    };
     println!(
-        "{} {} imported, {} created, {} updated, {} destroyed.",
+        "{} {import_text}{} created, {} updated, {} destroyed.",
         bold("Apply complete:"),
-        green(&summary.symlink_candidates.to_string()),
         green(&summary.create.to_string()),
         yellow(&summary.update.to_string()),
         red(&summary.remove.to_string()),
