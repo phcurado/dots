@@ -30,6 +30,7 @@ use crate::user::{
 pub(crate) enum SymlinkConflictReason {
     MissingSource { current_target: Option<PathBuf> },
     TargetUnmanaged,
+    TargetExistsDifferentContent,
     TargetExistsNotSymlink,
 }
 
@@ -240,6 +241,10 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             Ok(meta) if meta.is_file() && regular_file_matches(resource)? => {
                 plan.push(PlanStep::SymlinkUpdate(resource.clone()));
             }
+            Ok(meta) if meta.is_file() => plan.push(PlanStep::SymlinkConflict {
+                resource: resource.clone(),
+                reason: SymlinkConflictReason::TargetExistsDifferentContent,
+            }),
             Ok(_) => plan.push(PlanStep::SymlinkConflict {
                 resource: resource.clone(),
                 reason: SymlinkConflictReason::TargetExistsNotSymlink,

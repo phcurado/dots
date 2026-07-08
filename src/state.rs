@@ -52,7 +52,12 @@ pub(crate) fn load_state(path: &Path) -> Result<State> {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
-    serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
+    serde_json::from_str(&source).with_context(|| {
+        format!(
+            "failed to parse {}; delete this file to reset local state",
+            path.display()
+        )
+    })
 }
 
 pub(crate) fn save_state(path: &Path, state: &State) -> Result<()> {
@@ -85,5 +90,17 @@ mod tests {
         let error = load_state(root.path()).unwrap_err().to_string();
 
         assert!(error.contains("failed to read"));
+    }
+
+    #[test]
+    fn corrupt_state_parse_error_has_reset_hint() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state.json");
+        fs::write(&path, "not json").unwrap();
+
+        let error = load_state(&path).unwrap_err().to_string();
+
+        assert!(error.contains("failed to parse"));
+        assert!(error.contains("delete this file to reset local state"));
     }
 }

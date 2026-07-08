@@ -71,6 +71,9 @@ fn display_symlink_conflict_reason(
             message
         }
         SymlinkConflictReason::TargetUnmanaged => "target exists but is not managed".to_string(),
+        SymlinkConflictReason::TargetExistsDifferentContent => {
+            "target exists with different contents".to_string()
+        }
         SymlinkConflictReason::TargetExistsNotSymlink => {
             "target exists and is not a symlink".to_string()
         }

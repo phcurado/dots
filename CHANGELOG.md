@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.6.1
+
+`0.6.1` polishes apply and state handling after the 0.6.0 release.
+
+### Fixed
+
+- `dots apply` now persists state for completed steps even when a later step
+  fails.
+- Corrupt local state errors now include a reset hint.
+- Symlink conflicts now distinguish different file contents from non-file
+  targets.
+- Font source resolution uses clearer internal naming.
+
 ## 0.6.0
 
 `0.6.0` expands built-in providers and makes declared symlink imports part of the normal `dots check` / `dots apply` flow.

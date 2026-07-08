@@ -15,7 +15,7 @@ pub(crate) struct FontResource {
 
 pub(crate) fn expand_font_source(root: &Path, source: Option<&str>) -> Result<Vec<FontResource>> {
     let source = source.unwrap_or("fonts");
-    let source = resolve_source(root, source);
+    let source = resolve_font_source(root, source);
     if !source.exists() {
         return Ok(Vec::new());
     }
@@ -55,7 +55,7 @@ fn collect_fonts(
     Ok(())
 }
 
-fn resolve_source(root: &Path, source: &str) -> PathBuf {
+fn resolve_font_source(root: &Path, source: &str) -> PathBuf {
     let path = PathBuf::from(source);
     if path.is_absolute() {
         path

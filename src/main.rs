@@ -123,8 +123,7 @@ fn main() -> Result<()> {
             let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
             print_plan(&project, &plan, false);
             confirm_apply(&plan, auto_approve)?;
-            apply_plan(&plan, &mut state)?;
-            save_state(&state_path, &state)?;
+            apply_plan_and_save(&plan, &state_path, &mut state)?;
         }
         Command::Symlink { path, command } => {
             let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
@@ -249,6 +248,18 @@ local packages = { "bat", "ripgrep" }
 -- 	dots.symlink("~/.gitconfig", "profiles/work/gitconfig")
 -- end
 "#
+}
+
+fn apply_plan_and_save(plan: &[PlanStep], state_path: &Path, state: &mut State) -> Result<()> {
+    match apply_plan(plan, state) {
+        Ok(()) => save_state(state_path, state),
+        Err(error) => {
+            if let Err(save_error) = save_state(state_path, state) {
+                eprintln!("warning: failed to save partial state: {save_error:#}");
+            }
+            Err(error)
+        }
+    }
 }
 
 fn confirm_apply(plan: &[plan::PlanStep], auto_approve: bool) -> Result<()> {
@@ -447,8 +458,7 @@ fn apply_symlink_plan(
     }
     confirm_symlink_apply(summary.total_changes(), auto_approve)?;
 
-    apply_plan(&apply_steps, state)?;
-    save_state(state_path, state)?;
+    apply_plan_and_save(&apply_steps, state_path, state)?;
 
     Ok(())
 }
