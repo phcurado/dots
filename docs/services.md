@@ -43,24 +43,25 @@ If those declarations are removed later, `dots check` shows the inverse action:
 - `enable` becomes `disable`
 - `start` becomes `stop`
 
-### Service files
+### Unit files
 
-You can also install your own service file:
+You can also install your own systemd units:
 
 ```lua
-dots.systemd.service("my-service", {
-  file = "services/my-service.service",
+dots.systemd.install({
+  "systemd/automatic-timezone.service",
+  "systemd/automatic-timezone.timer",
 })
 
-dots.systemd.enable({ "my-service.service" })
-dots.systemd.start({ "my-service.service" })
+dots.systemd.enable({ "automatic-timezone.timer" })
+dots.systemd.start({ "automatic-timezone.timer" })
 ```
 
-The source path is relative to the dots project. The service is installed as `/etc/systemd/system/my-service.service`; If the name already ends with `.service`, the name is kept as-is.
+Source paths are relative to the dots project. Each file is installed in `/etc/systemd/system` using its basename. This works with services, timers, sockets, paths, and other unit types.
 
-When applying, dots installs the file and reloads systemd before enabling or starting it. If you remove all three declarations, dots stops and disables the service before removing its file. Removing only `start` or `enable` keeps the file installed.
+When applying, dots installs the files and reloads systemd before enabling or starting them. If you remove all declarations, dots stops and disables the timer before removing both files. Removing only `start` or `enable` keeps the unit files installed.
 
-`dots check` compares the source with the installed service file. A changed source is shown as an update.
+`dots check` compares each source with its installed unit file. A changed source is shown as an update.
 
 ## OpenRC
 

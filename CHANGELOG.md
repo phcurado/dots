@@ -2,17 +2,17 @@
 
 ## 0.7.0
 
-`0.7.0` adds declarative Docker Compose applications and managed systemd service files.
+`0.7.0` adds declarative Docker Compose applications and managed systemd unit files.
 
 ### Added
 
 - `dots.docker.compose(...)` for applying, checking, and removing tracked Docker Compose applications.
-- `dots.systemd.service(...)` for installing and removing system-wide systemd service files.
-- Automatic ordering so managed systemd files are installed before their services are enabled or started, and removed after they are stopped and disabled.
+- `dots.systemd.install(...)` for installing and removing system-wide systemd unit files.
+- Automatic ordering so managed systemd units are installed before they are enabled or started, and removed after they are stopped and disabled.
 
 ### Changed
 
-- Docker Compose projects and managed systemd service files are persisted in local state, so removing their declarations applies the corresponding cleanup.
+- Docker Compose projects and managed systemd unit files are persisted in local state, so removing their declarations applies the corresponding cleanup.
 
 ## 0.6.1
 

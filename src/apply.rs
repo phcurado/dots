@@ -523,7 +523,7 @@ fn step_needs(step: &PlanStep) -> Vec<String> {
         PlanStep::ServiceCreate { provider, resource } => {
             let mut needs = vec![provider.capability.clone()];
             if resource.provider == "systemd" {
-                needs.push(format!("systemd-service:{}", resource.name));
+                needs.push(format!("systemd-unit:{}", resource.name));
             }
             needs
         }

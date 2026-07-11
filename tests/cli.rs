@@ -326,7 +326,7 @@ fn systemd_service_is_installed_tracked_and_removed_after_source_deletion() {
     fs::write(
         root.join("dots.lua"),
         r#"
-        dots.systemd.service("my-service", { file = "services/my-service.service" })
+        dots.systemd.install({ "services/my-service.service" })
         dots.systemd.enable({ "my-service.service" })
         dots.systemd.start({ "my-service.service" })
         "#,
@@ -387,7 +387,7 @@ esac
     assert!(
         fs::read_to_string(root.join(".dots/state.json"))
             .unwrap()
-            .contains("systemd-service:my-service.service")
+            .contains("systemd-unit:my-service.service")
     );
 
     fs::write(root.join("dots.lua"), "").unwrap();
@@ -413,7 +413,7 @@ esac
     assert!(
         !fs::read_to_string(root.join(".dots/state.json"))
             .unwrap()
-            .contains("systemd-service:my-service.service")
+            .contains("systemd-unit:my-service.service")
     );
 }
 

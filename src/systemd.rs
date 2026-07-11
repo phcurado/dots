@@ -10,21 +10,12 @@ const UNIT_DIR: &str = "/etc/systemd/system";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SystemdUnitResource {
-    pub(crate) name: String,
     pub(crate) unit: String,
     pub(crate) file: PathBuf,
 }
 
-pub(crate) fn unit_name(name: &str) -> String {
-    if name.ends_with(".service") {
-        name.to_string()
-    } else {
-        format!("{name}.service")
-    }
-}
-
 pub(crate) fn systemd_unit_id_for(resource: &SystemdUnitResource) -> String {
-    format!("systemd-service:{}", resource.unit)
+    format!("systemd-unit:{}", resource.unit)
 }
 
 pub(crate) fn systemd_available() -> bool {
@@ -79,18 +70,16 @@ pub(crate) fn remove_unit(resource: &SystemdUnitResource) -> Result<()> {
 
 pub(crate) fn state_systemd_unit(resource: &SystemdUnitResource) -> StateResource {
     StateResource::SystemdUnit {
-        name: resource.name.clone(),
         unit: resource.unit.clone(),
         file: resource.file.clone(),
     }
 }
 
 pub(crate) fn systemd_unit_from_state(resource: &StateResource) -> Option<SystemdUnitResource> {
-    let StateResource::SystemdUnit { name, unit, file } = resource else {
+    let StateResource::SystemdUnit { unit, file } = resource else {
         return None;
     };
     Some(SystemdUnitResource {
-        name: name.clone(),
         unit: unit.clone(),
         file: file.clone(),
     })
@@ -116,15 +105,4 @@ fn run_sudo<'a>(
         bail!("sudo command failed");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unit_name_adds_service_suffix() {
-        assert_eq!(unit_name("my-service"), "my-service.service");
-        assert_eq!(unit_name("my-service.service"), "my-service.service");
-    }
 }

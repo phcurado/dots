@@ -19,7 +19,7 @@ use crate::symlink::{
     SymlinkDeclaration, SymlinkResource, expand_home, expand_symlink_declaration, resolve_source,
     same_path,
 };
-use crate::systemd::{SystemdUnitResource, unit_name};
+use crate::systemd::SystemdUnitResource;
 use crate::user::{SystemGroupResource, UserConfig, UserGroupResource, resolve_shell};
 
 #[derive(Debug, Default)]
@@ -247,13 +247,8 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     }
     for item in systemd_units.sequence_values::<Table>() {
         let item = item?;
-        let name = item.get::<String>("name")?;
-        if name.is_empty() || name.contains('/') || matches!(name.as_str(), "." | "..") {
-            bail!("invalid systemd service name: {name}");
-        }
         config.systemd_units.push(SystemdUnitResource {
-            unit: unit_name(&name),
-            name,
+            unit: item.get::<String>("unit")?,
             file: PathBuf::from(item.get::<String>("file")?),
         });
     }
@@ -418,7 +413,7 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     for resource in config.systemd_units.drain(..) {
         match systemd_units.get(&resource.unit) {
             Some(existing) if existing == &resource => {}
-            Some(_) => bail!("duplicate systemd service: {}", resource.unit),
+            Some(_) => bail!("duplicate systemd unit: {}", resource.unit),
             None => {
                 systemd_units.insert(resource.unit.clone(), resource.clone());
                 systemd_unit_resources.push(resource);
@@ -574,15 +569,23 @@ fn load_builtin_lua(lua: &Lua) -> Result<()> {
 
 fn install_systemd_unit_api(lua: &Lua, dots: &Table, units: Table, root: PathBuf) -> Result<()> {
     let systemd: Table = dots.get("systemd")?;
-    let service = lua.create_function(move |lua, (name, spec): (String, Table)| {
-        let item = lua.create_table()?;
-        item.set("name", name)?;
-        let file = spec.get::<String>("file")?;
-        item.set("file", resolve_source(&root, &file).display().to_string())?;
-        units.raw_push(item)?;
+    let install = lua.create_function(move |lua, files: Table| {
+        for file in table_strings(Some(files)).map_err(mlua::Error::external)? {
+            let source = resolve_source(&root, &file);
+            let unit = source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!("invalid systemd unit file: {file}"))
+                })?;
+            let item = lua.create_table()?;
+            item.set("unit", unit)?;
+            item.set("file", source.display().to_string())?;
+            units.raw_push(item)?;
+        }
         Ok(())
     })?;
-    systemd.set("service", service)?;
+    systemd.set("install", install)?;
     Ok(())
 }
 
@@ -1040,10 +1043,10 @@ mod tests {
     fn loads_managed_systemd_services() {
         let project = temp_project(
             r#"
-            dots.systemd.service("my-service", {
-              file = "services/my-service.service",
+            dots.systemd.install({
+              "services/my-service.service",
+              "systemd/automatic-timezone.timer",
             })
-            dots.systemd.service("already.service", { file = "already.service" })
             "#,
         );
 
@@ -1055,7 +1058,7 @@ mod tests {
             config.systemd_units[0].file,
             project.root.join("services/my-service.service")
         );
-        assert_eq!(config.systemd_units[1].unit, "already.service");
+        assert_eq!(config.systemd_units[1].unit, "automatic-timezone.timer");
     }
 
     #[test]
