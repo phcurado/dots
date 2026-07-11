@@ -50,7 +50,7 @@ pub(crate) fn unit_current(resource: &SystemdUnitResource) -> Result<bool> {
 pub(crate) fn apply_unit(resource: &SystemdUnitResource) -> Result<()> {
     let installed = installed_path(resource);
     run_sudo(
-        ["install", "--mode", "0644"],
+        ["install", "-m", "0644"],
         [resource.file.as_path(), installed.as_path()],
     )?;
     run_sudo(["systemctl", "daemon-reload"], std::iter::empty::<&Path>())?;
