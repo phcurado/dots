@@ -43,6 +43,25 @@ If those declarations are removed later, `dots check` shows the inverse action:
 - `enable` becomes `disable`
 - `start` becomes `stop`
 
+### Service files
+
+You can also install your own service file:
+
+```lua
+dots.systemd.service("my-service", {
+  file = "services/my-service.service",
+})
+
+dots.systemd.enable({ "my-service.service" })
+dots.systemd.start({ "my-service.service" })
+```
+
+The source path is relative to the dots project. The service is installed as `/etc/systemd/system/my-service.service`; If the name already ends with `.service`, the name is kept as-is.
+
+When applying, dots installs the file and reloads systemd before enabling or starting it. If you remove all three declarations, dots stops and disables the service before removing its file. Removing only `start` or `enable` keeps the file installed.
+
+`dots check` compares the source with the installed service file. A changed source is shown as an update.
+
 ## OpenRC
 
 Use `dots.openrc` on distros that boot with OpenRC, such as Alpine:

@@ -307,6 +307,117 @@ esac
 }
 
 #[test]
+fn systemd_service_is_installed_tracked_and_removed_after_source_deletion() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_dir("cli-systemd");
+    let bin = root.join("bin");
+    let units = root.join("units");
+    let enabled = root.join("enabled");
+    let active = root.join("active");
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(&units).unwrap();
+    fs::create_dir_all(root.join("services")).unwrap();
+    fs::write(
+        root.join("services/my-service.service"),
+        "[Service]\nExecStart=/usr/bin/true\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        dots.systemd.service("my-service", { file = "services/my-service.service" })
+        dots.systemd.enable({ "my-service.service" })
+        dots.systemd.start({ "my-service.service" })
+        "#,
+    )
+    .unwrap();
+
+    let sudo = bin.join("sudo");
+    fs::write(
+        &sudo,
+        r#"#!/bin/sh
+if [ "$1" = "-v" ]; then exit 0; fi
+exec "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755)).unwrap();
+    let systemctl = bin.join("systemctl");
+    fs::write(
+        &systemctl,
+        r#"#!/bin/sh
+case "$1" in
+  --version|daemon-reload) exit 0 ;;
+  is-enabled) test -f "$FAKE_SYSTEMD_ENABLED" ;;
+  is-active) test -f "$FAKE_SYSTEMD_ACTIVE" ;;
+  enable) test -f "$DOTS_SYSTEMD_UNIT_DIR/my-service.service" && touch "$FAKE_SYSTEMD_ENABLED" ;;
+  start) test -f "$DOTS_SYSTEMD_UNIT_DIR/my-service.service" && touch "$FAKE_SYSTEMD_ACTIVE" ;;
+  disable) test -f "$DOTS_SYSTEMD_UNIT_DIR/my-service.service" && rm -f "$FAKE_SYSTEMD_ENABLED" ;;
+  stop) test -f "$DOTS_SYSTEMD_UNIT_DIR/my-service.service" && rm -f "$FAKE_SYSTEMD_ACTIVE" ;;
+  *) exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&systemctl, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("PATH", &path)
+        .env("DOTS_SYSTEMD_UNIT_DIR", &units)
+        .env("FAKE_SYSTEMD_ENABLED", &enabled)
+        .env("FAKE_SYSTEMD_ACTIVE", &active)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(units.join("my-service.service")).unwrap(),
+        "[Service]\nExecStart=/usr/bin/true\n"
+    );
+    assert!(enabled.exists());
+    assert!(active.exists());
+    assert!(
+        fs::read_to_string(root.join(".dots/state.json"))
+            .unwrap()
+            .contains("systemd-service:my-service.service")
+    );
+
+    fs::write(root.join("dots.lua"), "").unwrap();
+    fs::remove_file(root.join("services/my-service.service")).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("PATH", &path)
+        .env("DOTS_SYSTEMD_UNIT_DIR", &units)
+        .env("FAKE_SYSTEMD_ENABLED", &enabled)
+        .env("FAKE_SYSTEMD_ACTIVE", &active)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!units.join("my-service.service").exists());
+    assert!(!enabled.exists());
+    assert!(!active.exists());
+    assert!(
+        !fs::read_to_string(root.join(".dots/state.json"))
+            .unwrap()
+            .contains("systemd-service:my-service.service")
+    );
+}
+
+#[test]
 fn check_prints_capability_conflicts() {
     let root = temp_dir("cli-capability");
     fs::write(

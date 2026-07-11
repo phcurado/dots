@@ -102,18 +102,21 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkCreate(_)
             | PlanStep::PackageCreate { .. }
             | PlanStep::ServiceCreate { .. }
+            | PlanStep::SystemdUnitCreate(_)
             | PlanStep::ComposeCreate(_)
             | PlanStep::FontCreate(_)
             | PlanStep::SystemGroupCreate(_)
             | PlanStep::UserGroupAdd(_)
             | PlanStep::CommandCreate(_) => summary.create += 1,
             PlanStep::SymlinkUpdate(_)
+            | PlanStep::SystemdUnitUpdate(_)
             | PlanStep::ComposeUpdate(_)
             | PlanStep::FontUpdate(_)
             | PlanStep::UserShellUpdate { .. } => summary.update += 1,
             PlanStep::SymlinkRemove { .. }
             | PlanStep::PackageRemove { .. }
             | PlanStep::ServiceRemove { .. }
+            | PlanStep::SystemdUnitRemove(_)
             | PlanStep::ComposeRemove { .. }
             | PlanStep::FontRemove { .. }
             | PlanStep::SystemGroupRemove(_)
@@ -121,6 +124,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
+            | PlanStep::SystemdUnitConflict { .. }
             | PlanStep::ComposeConflict { .. }
             | PlanStep::FontConflict { .. }
             | PlanStep::SystemGroupConflict { .. }
@@ -130,6 +134,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkNoop(_)
             | PlanStep::PackageNoop { .. }
             | PlanStep::ServiceNoop(_)
+            | PlanStep::SystemdUnitNoop(_)
             | PlanStep::ComposeNoop { .. }
             | PlanStep::FontNoop(_)
             | PlanStep::UserShellNoop
@@ -293,6 +298,39 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
+    let has_systemd_units = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::SystemdUnitCreate(_)
+                | PlanStep::SystemdUnitUpdate(_)
+                | PlanStep::SystemdUnitRemove(_)
+                | PlanStep::SystemdUnitConflict { .. }
+        )
+    });
+    if has_systemd_units {
+        if has_capabilities || has_symlinks || has_packages || has_fonts || has_commands {
+            println!();
+        }
+        println!("{}", bold("Systemd:"));
+        for step in plan {
+            match step {
+                PlanStep::SystemdUnitCreate(resource) => {
+                    println!("  {} apply {}", green("+"), resource.unit)
+                }
+                PlanStep::SystemdUnitUpdate(resource) => {
+                    println!("  {} apply {}", yellow("~"), resource.unit)
+                }
+                PlanStep::SystemdUnitRemove(resource) => {
+                    println!("  {} remove {}", red("-"), resource.unit)
+                }
+                PlanStep::SystemdUnitConflict { resource, reason } => {
+                    println!("  {} {} ({reason})", red("!"), resource.unit)
+                }
+                _ => {}
+            }
+        }
+    }
+
     let has_compose = plan.iter().any(|step| {
         matches!(
             step,
@@ -303,7 +341,13 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_compose {
-        if has_capabilities || has_symlinks || has_packages || has_fonts || has_commands {
+        if has_capabilities
+            || has_symlinks
+            || has_packages
+            || has_fonts
+            || has_commands
+            || has_systemd_units
+        {
             println!();
         }
         println!("{}", bold("Docker Compose:"));
@@ -503,6 +547,9 @@ pub(crate) fn print_state(project: &Project, state: &State) {
                 action,
                 name,
             } => println!("  service {provider} {} {name}", action.as_str()),
+            StateResource::SystemdUnit { unit, file, .. } => {
+                println!("  systemd {unit} {}", display_source(project, file))
+            }
             StateResource::Compose { name, file, .. } => {
                 println!("  docker compose {name} {}", display_source(project, file))
             }

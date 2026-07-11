@@ -19,6 +19,7 @@ use crate::symlink::{
     SymlinkDeclaration, SymlinkResource, expand_home, expand_symlink_declaration, resolve_source,
     same_path,
 };
+use crate::systemd::{SystemdUnitResource, unit_name};
 use crate::user::{SystemGroupResource, UserConfig, UserGroupResource, resolve_shell};
 
 #[derive(Debug, Default)]
@@ -27,6 +28,7 @@ pub(crate) struct Config {
     pub(crate) symlink_declarations: Vec<SymlinkDeclaration>,
     pub(crate) packages: Vec<PackageResource>,
     pub(crate) services: Vec<ServiceResource>,
+    pub(crate) systemd_units: Vec<SystemdUnitResource>,
     pub(crate) compose: Vec<ComposeResource>,
     pub(crate) fonts: Vec<FontResource>,
     pub(crate) commands: Vec<CommandResource>,
@@ -42,6 +44,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let package_providers = lua.create_table()?;
     let service_providers = lua.create_table()?;
     let services = lua.create_table()?;
+    let systemd_units = lua.create_table()?;
     let compose_resources = lua.create_table()?;
     let font_sources = lua.create_table()?;
     let commands = lua.create_table()?;
@@ -195,10 +198,11 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         "dots",
         lua.create_function(move |_, ()| Ok(dots_module.clone()))?,
     )?;
-    lua.globals().set("dots", dots)?;
+    lua.globals().set("dots", &dots)?;
 
     install_package_path(&lua, &project.root)?;
     load_builtin_lua(&lua)?;
+    install_systemd_unit_api(&lua, &dots, systemd_units.clone(), project.root.clone())?;
 
     let source = fs::read_to_string(&project.config)
         .with_context(|| format!("failed to read {}", project.config.display()))?;
@@ -239,6 +243,18 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             provider: item.get::<String>("provider")?,
             action,
             name: item.get::<String>("name")?,
+        });
+    }
+    for item in systemd_units.sequence_values::<Table>() {
+        let item = item?;
+        let name = item.get::<String>("name")?;
+        if name.is_empty() || name.contains('/') || matches!(name.as_str(), "." | "..") {
+            bail!("invalid systemd service name: {name}");
+        }
+        config.systemd_units.push(SystemdUnitResource {
+            unit: unit_name(&name),
+            name,
+            file: PathBuf::from(item.get::<String>("file")?),
         });
     }
     for item in compose_resources.sequence_values::<Table>() {
@@ -397,6 +413,20 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
         .services
         .retain(|resource| service_ids.insert(crate::plan::service_id_for(resource)));
 
+    let mut systemd_units = BTreeMap::<String, SystemdUnitResource>::new();
+    let mut systemd_unit_resources = Vec::new();
+    for resource in config.systemd_units.drain(..) {
+        match systemd_units.get(&resource.unit) {
+            Some(existing) if existing == &resource => {}
+            Some(_) => bail!("duplicate systemd service: {}", resource.unit),
+            None => {
+                systemd_units.insert(resource.unit.clone(), resource.clone());
+                systemd_unit_resources.push(resource);
+            }
+        }
+    }
+    config.systemd_units = systemd_unit_resources;
+
     let mut compose_names = BTreeMap::<String, ComposeResource>::new();
     let mut compose = Vec::new();
     for resource in config.compose.drain(..) {
@@ -539,6 +569,20 @@ fn load_builtin_lua(lua: &Lua) -> Result<()> {
     ] {
         lua.load(source).set_name(name).exec()?;
     }
+    Ok(())
+}
+
+fn install_systemd_unit_api(lua: &Lua, dots: &Table, units: Table, root: PathBuf) -> Result<()> {
+    let systemd: Table = dots.get("systemd")?;
+    let service = lua.create_function(move |lua, (name, spec): (String, Table)| {
+        let item = lua.create_table()?;
+        item.set("name", name)?;
+        let file = spec.get::<String>("file")?;
+        item.set("file", resolve_source(&root, &file).display().to_string())?;
+        units.raw_push(item)?;
+        Ok(())
+    })?;
+    systemd.set("service", service)?;
     Ok(())
 }
 
@@ -990,6 +1034,28 @@ mod tests {
                 && service.action == ServiceAction::Start
                 && service.name == "sketchybar"
         }));
+    }
+
+    #[test]
+    fn loads_managed_systemd_services() {
+        let project = temp_project(
+            r#"
+            dots.systemd.service("my-service", {
+              file = "services/my-service.service",
+            })
+            dots.systemd.service("already.service", { file = "already.service" })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert_eq!(config.systemd_units.len(), 2);
+        assert_eq!(config.systemd_units[0].unit, "my-service.service");
+        assert_eq!(
+            config.systemd_units[0].file,
+            project.root.join("services/my-service.service")
+        );
+        assert_eq!(config.systemd_units[1].unit, "already.service");
     }
 
     #[test]

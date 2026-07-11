@@ -22,6 +22,9 @@ use crate::state::{State, StateResource};
 use crate::symlink::{
     apply_symlink, apply_symlink_candidate, remove_symlink, state_symlink, symlink_id_for,
 };
+use crate::systemd::{
+    SystemdUnitResource, apply_unit, remove_unit, state_systemd_unit, systemd_unit_id_for,
+};
 use crate::user::{
     SystemGroupResource, UserGroupResource, UserShellResource, apply_group, apply_shell,
     create_group, remove_group, remove_user_from_group,
@@ -132,6 +135,25 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .insert(service_id_for(resource), state_service(resource));
             }
+            PlanStep::SystemdUnitCreate(resource) | PlanStep::SystemdUnitUpdate(resource) => {
+                apply_with_status(
+                    "Applying",
+                    "Apply",
+                    &format!("systemd.{}", resource.unit),
+                    || apply_systemd_unit(resource, state),
+                )?
+            }
+            PlanStep::SystemdUnitRemove(resource) => apply_with_status(
+                "Removing",
+                "Remove",
+                &format!("systemd.{}", resource.unit),
+                || remove_systemd_unit(resource, state),
+            )?,
+            PlanStep::SystemdUnitNoop(resource) => {
+                state
+                    .resources
+                    .insert(systemd_unit_id_for(resource), state_systemd_unit(resource));
+            }
             PlanStep::ComposeCreate(resource) | PlanStep::ComposeUpdate(resource) => {
                 apply_with_status(
                     "Applying",
@@ -223,6 +245,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
+            | PlanStep::SystemdUnitConflict { .. }
             | PlanStep::ComposeConflict { .. }
             | PlanStep::FontConflict { .. }
             | PlanStep::SystemGroupConflict { .. }
@@ -281,6 +304,9 @@ fn plan_uses_sudo(plan: &[PlanStep]) -> bool {
     plan.iter().any(|step| match step {
         PlanStep::PackageCreate { provider, .. } => shell_uses_sudo(&provider.install),
         PlanStep::PackageRemove { provider, .. } => shell_uses_sudo(&provider.remove),
+        PlanStep::SystemdUnitCreate(_)
+        | PlanStep::SystemdUnitUpdate(_)
+        | PlanStep::SystemdUnitRemove(_) => true,
         PlanStep::ServiceCreate { provider, resource } => match resource.action {
             crate::service::ServiceAction::Start => {
                 provider.start.as_deref().is_some_and(shell_uses_sudo)
@@ -417,6 +443,9 @@ fn is_apply_step(step: &PlanStep) -> bool {
             | PlanStep::PackageRemove { .. }
             | PlanStep::ServiceCreate { .. }
             | PlanStep::ServiceRemove { .. }
+            | PlanStep::SystemdUnitCreate(_)
+            | PlanStep::SystemdUnitUpdate(_)
+            | PlanStep::SystemdUnitRemove(_)
             | PlanStep::ComposeCreate(_)
             | PlanStep::ComposeUpdate(_)
             | PlanStep::ComposeRemove { .. }
@@ -443,6 +472,10 @@ fn step_id(step: &PlanStep) -> Option<String> {
         PlanStep::ServiceCreate { resource, .. } | PlanStep::ServiceRemove { resource, .. } => {
             Some(service_id_for(resource))
         }
+        PlanStep::SystemdUnitCreate(resource)
+        | PlanStep::SystemdUnitUpdate(resource)
+        | PlanStep::SystemdUnitRemove(resource)
+        | PlanStep::SystemdUnitNoop(resource) => Some(systemd_unit_id_for(resource)),
         PlanStep::ComposeCreate(resource)
         | PlanStep::ComposeUpdate(resource)
         | PlanStep::ComposeRemove { resource, .. } => Some(compose_id_for(resource)),
@@ -487,9 +520,18 @@ fn step_needs(step: &PlanStep) -> Vec<String> {
         PlanStep::PackageCreate { provider, .. } | PlanStep::PackageRemove { provider, .. } => {
             vec![provider.capability.clone()]
         }
-        PlanStep::ServiceCreate { provider, .. } | PlanStep::ServiceRemove { provider, .. } => {
-            vec![provider.capability.clone()]
+        PlanStep::ServiceCreate { provider, resource } => {
+            let mut needs = vec![provider.capability.clone()];
+            if resource.provider == "systemd" {
+                needs.push(format!("systemd-service:{}", resource.name));
+            }
+            needs
         }
+        PlanStep::ServiceRemove { provider, .. } => vec![provider.capability.clone()],
+        PlanStep::SystemdUnitRemove(resource) => vec![
+            format!("service:systemd:start:{}", resource.unit),
+            format!("service:systemd:enable:{}", resource.unit),
+        ],
         _ => Vec::new(),
     }
 }
@@ -523,6 +565,10 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
             PlanStep::FontNoop(resource) => state
                 .resources
                 .insert(font_id_for(resource), state_font(resource))
+                .is_none(),
+            PlanStep::SystemdUnitNoop(resource) => state
+                .resources
+                .insert(systemd_unit_id_for(resource), state_systemd_unit(resource))
                 .is_none(),
             PlanStep::SystemGroupNoop(resource) => state
                 .resources
@@ -586,6 +632,20 @@ fn install_font(resource: &FontResource, state: &mut State) -> Result<()> {
 fn uninstall_font(resource: &StateResource, state: &mut State) -> Result<()> {
     remove_font(resource, state)?;
     refresh_font_cache()?;
+    Ok(())
+}
+
+fn apply_systemd_unit(resource: &SystemdUnitResource, state: &mut State) -> Result<()> {
+    apply_unit(resource)?;
+    state
+        .resources
+        .insert(systemd_unit_id_for(resource), state_systemd_unit(resource));
+    Ok(())
+}
+
+fn remove_systemd_unit(resource: &SystemdUnitResource, state: &mut State) -> Result<()> {
+    remove_unit(resource)?;
+    state.resources.remove(&systemd_unit_id_for(resource));
     Ok(())
 }
 

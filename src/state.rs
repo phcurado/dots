@@ -20,6 +20,12 @@ pub(crate) enum StateResource {
         action: ServiceAction,
         name: String,
     },
+    #[serde(rename = "systemd-service")]
+    SystemdUnit {
+        name: String,
+        unit: String,
+        file: PathBuf,
+    },
     #[serde(rename = "compose")]
     Compose {
         name: String,
@@ -47,6 +53,7 @@ impl StateResource {
         "symlink:",
         "package:",
         "service:",
+        "systemd-service:",
         "compose:",
         "font:",
         "group:",

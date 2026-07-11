@@ -11,6 +11,7 @@ mod project;
 mod service;
 mod state;
 mod symlink;
+mod systemd;
 mod user;
 
 use anyhow::{Context, Result, bail};

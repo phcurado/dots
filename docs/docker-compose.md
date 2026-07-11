@@ -26,7 +26,7 @@ The default removal preserves volumes and images.
 
 ## Arguments
 
-If you wish to change the behaviour above, you can override it: 
+If you wish to change the behaviour above, you can override it:
 
 ```lua
 dots.docker.compose("my-service", {
@@ -40,4 +40,3 @@ dots.docker.compose("my-service", {
 ## Checking state
 
 `dots check` compares the resolved Compose configuration with the configuration recorded after the last successful apply. It also verifies that every active service has a running container and that containers with health checks are healthy.
-

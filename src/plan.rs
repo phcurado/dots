@@ -25,6 +25,10 @@ use crate::symlink::{
     stale_symlinks_for_declaration, state_symlink, symlink_candidate_for_resource, symlink_id_for,
     symlink_matches,
 };
+use crate::systemd::{
+    SystemdUnitResource, systemd_available, systemd_unit_from_state, systemd_unit_id_for,
+    unit_current, unit_file_matches, unit_installed,
+};
 use crate::user::{
     SystemGroupResource, UserGroupResource, UserShellResource, current_shell, shell_matches,
     system_group_exists, user_in_group,
@@ -80,6 +84,14 @@ pub(crate) enum PlanStep {
     ServiceNoop(ServiceResource),
     ServiceConflict {
         resource: ServiceResource,
+        reason: String,
+    },
+    SystemdUnitCreate(SystemdUnitResource),
+    SystemdUnitUpdate(SystemdUnitResource),
+    SystemdUnitRemove(SystemdUnitResource),
+    SystemdUnitNoop(SystemdUnitResource),
+    SystemdUnitConflict {
+        resource: SystemdUnitResource,
         reason: String,
     },
     ComposeCreate(ComposeResource),
@@ -181,6 +193,17 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
             state
                 .resources
                 .insert(service_id_for(resource), state_service(resource));
+        }
+    }
+
+    if systemd_available() {
+        for resource in &config.systemd_units {
+            if resource.file.exists() && unit_current(resource)? {
+                state.resources.insert(
+                    systemd_unit_id_for(resource),
+                    crate::systemd::state_systemd_unit(resource),
+                );
+            }
         }
     }
 
@@ -344,6 +367,34 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             plan.push(PlanStep::PackageCreate {
                 resource: resource.clone(),
                 provider: provider.clone(),
+            });
+        }
+    }
+
+    let systemd_is_available = systemd_available();
+    for resource in &config.systemd_units {
+        let id = systemd_unit_id_for(resource);
+        declared.insert(id.clone());
+        if !resource.file.exists() {
+            plan.push(PlanStep::SystemdUnitConflict {
+                resource: resource.clone(),
+                reason: format!("source does not exist: {}", resource.file.display()),
+            });
+        } else if !systemd_is_available {
+            plan.push(PlanStep::SystemdUnitConflict {
+                resource: resource.clone(),
+                reason: "systemd is not available".to_string(),
+            });
+        } else if unit_current(resource)? {
+            plan.push(PlanStep::SystemdUnitNoop(resource.clone()));
+        } else if state.resources.contains_key(&id) {
+            plan.push(PlanStep::SystemdUnitUpdate(resource.clone()));
+        } else if unit_file_matches(resource)? || !unit_installed(resource) {
+            plan.push(PlanStep::SystemdUnitCreate(resource.clone()));
+        } else {
+            plan.push(PlanStep::SystemdUnitConflict {
+                resource: resource.clone(),
+                reason: "installed service is not managed".to_string(),
             });
         }
     }
@@ -543,6 +594,18 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                         resource,
                         reason: format!("{provider} service provider is not configured"),
                     }),
+                }
+            }
+            StateResource::SystemdUnit { .. } => {
+                let resource =
+                    systemd_unit_from_state(resource).expect("systemd unit state resource");
+                if systemd_is_available {
+                    plan.push(PlanStep::SystemdUnitRemove(resource));
+                } else {
+                    plan.push(PlanStep::SystemdUnitConflict {
+                        resource,
+                        reason: "systemd is not available".to_string(),
+                    });
                 }
             }
             StateResource::Compose { .. } => {
