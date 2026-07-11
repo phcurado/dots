@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use mlua::{Lua, Table, Value};
 
 use crate::command::CommandResource;
+use crate::docker::ComposeResource;
 use crate::font::{FontResource, expand_font_source};
 use crate::package::{
     PackageList, PackageListFormat, PackageMatcher, PackageProvider, PackageResource,
@@ -26,6 +27,7 @@ pub(crate) struct Config {
     pub(crate) symlink_declarations: Vec<SymlinkDeclaration>,
     pub(crate) packages: Vec<PackageResource>,
     pub(crate) services: Vec<ServiceResource>,
+    pub(crate) compose: Vec<ComposeResource>,
     pub(crate) fonts: Vec<FontResource>,
     pub(crate) commands: Vec<CommandResource>,
     pub(crate) package_providers: BTreeMap<String, PackageProvider>,
@@ -40,6 +42,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let package_providers = lua.create_table()?;
     let service_providers = lua.create_table()?;
     let services = lua.create_table()?;
+    let compose_resources = lua.create_table()?;
     let font_sources = lua.create_table()?;
     let commands = lua.create_table()?;
     let system_groups = lua.create_table()?;
@@ -143,7 +146,30 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
 
     let platform = platform_table(&lua)?;
 
+    let docker = lua.create_table()?;
+    let collected_compose = compose_resources.clone();
+    let root = project.root.clone();
+    let compose = lua.create_function(move |lua, (name, spec): (String, Table)| {
+        let item = lua.create_table()?;
+        item.set("name", name)?;
+        let file = spec.get::<String>("file")?;
+        item.set("file", resolve_source(&root, &file).display().to_string())?;
+        if let Some(profiles) = spec.get::<Option<Table>>("profiles")? {
+            item.set("profiles", profiles)?;
+        }
+        if let Some(apply) = spec.get::<Option<Table>>("apply")? {
+            item.set("apply", apply)?;
+        }
+        if let Some(remove) = spec.get::<Option<Table>>("remove")? {
+            item.set("remove", remove)?;
+        }
+        collected_compose.raw_push(item)?;
+        Ok(())
+    })?;
+    docker.set("compose", compose)?;
+
     dots.set("symlink", symlink)?;
+    dots.set("docker", docker)?;
     dots.set("fonts", fonts)?;
     dots.set("command", command)?;
     dots.set("group", group)?;
@@ -213,6 +239,22 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             provider: item.get::<String>("provider")?,
             action,
             name: item.get::<String>("name")?,
+        });
+    }
+    for item in compose_resources.sequence_values::<Table>() {
+        let item = item?;
+        config.compose.push(ComposeResource {
+            name: item.get::<String>("name")?,
+            file: PathBuf::from(item.get::<String>("file")?),
+            profiles: table_strings(item.get::<Option<Table>>("profiles")?)?,
+            apply: match item.get::<Option<Table>>("apply")? {
+                Some(args) => table_strings(Some(args))?,
+                None => vec!["up".to_string(), "--detach".to_string()],
+            },
+            remove: match item.get::<Option<Table>>("remove")? {
+                Some(args) => table_strings(Some(args))?,
+                None => vec!["down".to_string()],
+            },
         });
     }
     for source in font_sources.sequence_values::<String>() {
@@ -354,6 +396,20 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     config
         .services
         .retain(|resource| service_ids.insert(crate::plan::service_id_for(resource)));
+
+    let mut compose_names = BTreeMap::<String, ComposeResource>::new();
+    let mut compose = Vec::new();
+    for resource in config.compose.drain(..) {
+        match compose_names.get(&resource.name) {
+            Some(existing) if existing == &resource => {}
+            Some(_) => bail!("duplicate Docker Compose application: {}", resource.name),
+            None => {
+                compose_names.insert(resource.name.clone(), resource.clone());
+                compose.push(resource);
+            }
+        }
+    }
+    config.compose = compose;
 
     let mut font_ids = BTreeSet::new();
     config
@@ -934,6 +990,44 @@ mod tests {
                 && service.action == ServiceAction::Start
                 && service.name == "sketchybar"
         }));
+    }
+
+    #[test]
+    fn loads_docker_compose_applications() {
+        let project = temp_project(
+            r#"
+            dots.docker.compose("my-service", {
+              file = "services/my-service/compose.yaml",
+              profiles = { "production" },
+              apply = { "up", "--detach", "--wait" },
+              remove = { "down", "--remove-orphans" },
+            })
+            "#,
+        );
+
+        let config = load_config(&project, "test").unwrap();
+        let resource = &config.compose[0];
+
+        assert_eq!(resource.name, "my-service");
+        assert_eq!(
+            resource.file,
+            project.root.join("services/my-service/compose.yaml")
+        );
+        assert_eq!(resource.profiles, vec!["production"]);
+        assert_eq!(resource.apply, vec!["up", "--detach", "--wait"]);
+        assert_eq!(resource.remove, vec!["down", "--remove-orphans"]);
+    }
+
+    #[test]
+    fn docker_compose_uses_safe_defaults() {
+        let project =
+            temp_project(r#"dots.docker.compose("my-service", { file = "compose.yaml" })"#);
+
+        let config = load_config(&project, "test").unwrap();
+        let resource = &config.compose[0];
+
+        assert_eq!(resource.apply, vec!["up", "--detach"]);
+        assert_eq!(resource.remove, vec!["down"]);
     }
 
     #[test]

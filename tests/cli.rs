@@ -223,6 +223,90 @@ fn check_prints_command_changes() {
 }
 
 #[test]
+fn docker_compose_is_applied_and_removed_when_undeclared() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_dir("cli-compose");
+    let bin = root.join("bin");
+    let running = root.join("running");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(
+        root.join("compose.yaml"),
+        "services:\n  web:\n    image: nginx\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.docker.compose("my-service", { file = "compose.yaml" })"#,
+    )
+    .unwrap();
+    let docker = bin.join("docker");
+    fs::write(
+        &docker,
+        r#"#!/bin/sh
+case " $* " in
+  *" compose version "*) exit 0 ;;
+  *" config --services "*) printf 'web\n' ;;
+  *" config "*) printf 'services:\n  web:\n    image: nginx\n' ;;
+  *" ps "*)
+    if [ -f "$FAKE_DOCKER_STATE" ]; then
+      printf '%s\n' '{"Service":"web","State":"running","Health":""}'
+    fi
+    ;;
+  *" up "*) touch "$FAKE_DOCKER_STATE" ;;
+  *" down "*) rm -f "$FAKE_DOCKER_STATE" ;;
+  *) exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("PATH", &path)
+        .env("FAKE_DOCKER_STATE", &running)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(running.exists());
+    assert!(
+        fs::read_to_string(root.join(".dots/state.json"))
+            .unwrap()
+            .contains("compose:my-service")
+    );
+
+    fs::write(root.join("dots.lua"), "").unwrap();
+    fs::remove_file(root.join("compose.yaml")).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("PATH", &path)
+        .env("FAKE_DOCKER_STATE", &running)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!running.exists());
+    assert!(
+        !fs::read_to_string(root.join(".dots/state.json"))
+            .unwrap()
+            .contains("compose:my-service")
+    );
+}
+
+#[test]
 fn check_prints_capability_conflicts() {
     let root = temp_dir("cli-capability");
     fs::write(

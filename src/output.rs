@@ -102,22 +102,26 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkCreate(_)
             | PlanStep::PackageCreate { .. }
             | PlanStep::ServiceCreate { .. }
+            | PlanStep::ComposeCreate(_)
             | PlanStep::FontCreate(_)
             | PlanStep::SystemGroupCreate(_)
             | PlanStep::UserGroupAdd(_)
             | PlanStep::CommandCreate(_) => summary.create += 1,
             PlanStep::SymlinkUpdate(_)
+            | PlanStep::ComposeUpdate(_)
             | PlanStep::FontUpdate(_)
             | PlanStep::UserShellUpdate { .. } => summary.update += 1,
             PlanStep::SymlinkRemove { .. }
             | PlanStep::PackageRemove { .. }
             | PlanStep::ServiceRemove { .. }
+            | PlanStep::ComposeRemove { .. }
             | PlanStep::FontRemove { .. }
             | PlanStep::SystemGroupRemove(_)
             | PlanStep::UserGroupRemove(_) => summary.remove += 1,
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
+            | PlanStep::ComposeConflict { .. }
             | PlanStep::FontConflict { .. }
             | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
@@ -126,6 +130,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkNoop(_)
             | PlanStep::PackageNoop { .. }
             | PlanStep::ServiceNoop(_)
+            | PlanStep::ComposeNoop { .. }
             | PlanStep::FontNoop(_)
             | PlanStep::UserShellNoop
             | PlanStep::SystemGroupNoop(_)
@@ -288,6 +293,39 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
+    let has_compose = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::ComposeCreate(_)
+                | PlanStep::ComposeUpdate(_)
+                | PlanStep::ComposeRemove { .. }
+                | PlanStep::ComposeConflict { .. }
+        )
+    });
+    if has_compose {
+        if has_capabilities || has_symlinks || has_packages || has_fonts || has_commands {
+            println!();
+        }
+        println!("{}", bold("Docker Compose:"));
+        for step in plan {
+            match step {
+                PlanStep::ComposeCreate(resource) => {
+                    println!("  {} apply {}", green("+"), resource.name)
+                }
+                PlanStep::ComposeUpdate(resource) => {
+                    println!("  {} apply {}", yellow("~"), resource.name)
+                }
+                PlanStep::ComposeRemove { resource, .. } => {
+                    println!("  {} remove {}", red("-"), resource.name)
+                }
+                PlanStep::ComposeConflict { resource, reason } => {
+                    println!("  {} {} ({reason})", red("!"), resource.name)
+                }
+                _ => {}
+            }
+        }
+    }
+
     let has_services = plan.iter().any(|step| {
         matches!(
             step,
@@ -297,7 +335,13 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_services {
-        if has_capabilities || has_symlinks || has_packages || has_fonts || has_commands {
+        if has_capabilities
+            || has_symlinks
+            || has_packages
+            || has_fonts
+            || has_commands
+            || has_compose
+        {
             println!();
         }
         println!("{}", bold("Services:"));
@@ -459,6 +503,9 @@ pub(crate) fn print_state(project: &Project, state: &State) {
                 action,
                 name,
             } => println!("  service {provider} {} {name}", action.as_str()),
+            StateResource::Compose { name, file, .. } => {
+                println!("  docker compose {name} {}", display_source(project, file))
+            }
             StateResource::Font { target, .. } => println!("  font {}", display_target(target)),
             StateResource::Group { name } => println!("  group {name}"),
             StateResource::UserGroup { name } => println!("  user group {name}"),

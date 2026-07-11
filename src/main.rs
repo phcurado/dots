@@ -1,6 +1,7 @@
 mod apply;
 mod command;
 mod config;
+mod docker;
 mod font;
 mod output;
 mod package;

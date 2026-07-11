@@ -20,6 +20,15 @@ pub(crate) enum StateResource {
         action: ServiceAction,
         name: String,
     },
+    #[serde(rename = "compose")]
+    Compose {
+        name: String,
+        file: PathBuf,
+        profiles: Vec<String>,
+        apply: Vec<String>,
+        remove: Vec<String>,
+        fingerprint: String,
+    },
     #[serde(rename = "font")]
     Font { source: PathBuf, target: PathBuf },
     #[serde(rename = "group")]
@@ -38,6 +47,7 @@ impl StateResource {
         "symlink:",
         "package:",
         "service:",
+        "compose:",
         "font:",
         "group:",
         "user-group:",

@@ -21,6 +21,7 @@ export default defineConfig({
           { text: "Symlinks", link: "/symlinks" },
           { text: "Packages", link: "/packages" },
           { text: "Services", link: "/services" },
+          { text: "Docker Compose", link: "/docker-compose" },
           { text: "Commands", link: "/commands" },
           { text: "Fonts", link: "/fonts" },
           { text: "User", link: "/user" },

@@ -4,6 +4,9 @@ use std::process::{Command as ProcessCommand, Stdio};
 use anyhow::{Result, bail};
 
 use crate::command::{CommandResource, command_apply, command_id_for};
+use crate::docker::{
+    ComposeResource, compose_apply, compose_id_for, compose_remove, state_compose,
+};
 use crate::font::{FontResource, apply_font, refresh_font_cache, remove_font, state_font};
 use crate::output::{apply_with_status, bold, display_target, green, red, summarize_plan, yellow};
 use crate::package::{
@@ -129,6 +132,32 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .insert(service_id_for(resource), state_service(resource));
             }
+            PlanStep::ComposeCreate(resource) | PlanStep::ComposeUpdate(resource) => {
+                apply_with_status(
+                    "Applying",
+                    "Apply",
+                    &format!("compose.{}", resource.name),
+                    || apply_compose(resource, state),
+                )?
+            }
+            PlanStep::ComposeRemove {
+                resource,
+                stored_config,
+            } => apply_with_status(
+                "Removing",
+                "Remove",
+                &format!("compose.{}", resource.name),
+                || remove_compose(resource, stored_config, state),
+            )?,
+            PlanStep::ComposeNoop {
+                resource,
+                fingerprint,
+            } => {
+                state.resources.insert(
+                    compose_id_for(resource),
+                    state_compose(resource, fingerprint.clone()),
+                );
+            }
             PlanStep::FontCreate(resource) | PlanStep::FontUpdate(resource) => apply_with_status(
                 "Installing",
                 "Install",
@@ -194,6 +223,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
             PlanStep::SymlinkConflict { .. }
             | PlanStep::PackageConflict { .. }
             | PlanStep::ServiceConflict { .. }
+            | PlanStep::ComposeConflict { .. }
             | PlanStep::FontConflict { .. }
             | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
@@ -387,6 +417,9 @@ fn is_apply_step(step: &PlanStep) -> bool {
             | PlanStep::PackageRemove { .. }
             | PlanStep::ServiceCreate { .. }
             | PlanStep::ServiceRemove { .. }
+            | PlanStep::ComposeCreate(_)
+            | PlanStep::ComposeUpdate(_)
+            | PlanStep::ComposeRemove { .. }
             | PlanStep::FontCreate(_)
             | PlanStep::FontUpdate(_)
             | PlanStep::FontRemove { .. }
@@ -410,6 +443,9 @@ fn step_id(step: &PlanStep) -> Option<String> {
         PlanStep::ServiceCreate { resource, .. } | PlanStep::ServiceRemove { resource, .. } => {
             Some(service_id_for(resource))
         }
+        PlanStep::ComposeCreate(resource)
+        | PlanStep::ComposeUpdate(resource)
+        | PlanStep::ComposeRemove { resource, .. } => Some(compose_id_for(resource)),
         PlanStep::FontCreate(resource) | PlanStep::FontUpdate(resource) => {
             Some(font_id_for(resource))
         }
@@ -473,6 +509,16 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
             PlanStep::ServiceNoop(resource) => state
                 .resources
                 .insert(service_id_for(resource), state_service(resource))
+                .is_none(),
+            PlanStep::ComposeNoop {
+                resource,
+                fingerprint,
+            } => state
+                .resources
+                .insert(
+                    compose_id_for(resource),
+                    state_compose(resource, fingerprint.clone()),
+                )
                 .is_none(),
             PlanStep::FontNoop(resource) => state
                 .resources
@@ -540,6 +586,25 @@ fn install_font(resource: &FontResource, state: &mut State) -> Result<()> {
 fn uninstall_font(resource: &StateResource, state: &mut State) -> Result<()> {
     remove_font(resource, state)?;
     refresh_font_cache()?;
+    Ok(())
+}
+
+fn apply_compose(resource: &ComposeResource, state: &mut State) -> Result<()> {
+    let fingerprint = compose_apply(resource)?;
+    state.resources.insert(
+        compose_id_for(resource),
+        state_compose(resource, fingerprint),
+    );
+    Ok(())
+}
+
+fn remove_compose(
+    resource: &ComposeResource,
+    stored_config: &str,
+    state: &mut State,
+) -> Result<()> {
+    compose_remove(resource, stored_config)?;
+    state.resources.remove(&compose_id_for(resource));
     Ok(())
 }
 

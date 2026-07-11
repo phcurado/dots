@@ -6,6 +6,10 @@ use anyhow::Result;
 
 use crate::command::{CommandResource, command_current};
 use crate::config::Config;
+use crate::docker::{
+    ComposeResource, compose_available, compose_current, compose_from_state, compose_id_for,
+    state_compose,
+};
 use crate::font::{FontResource, font_matches, state_font};
 use crate::package::{
     PackageProvider, PackageResource, PackageStatusCache, package_installed_cached,
@@ -76,6 +80,20 @@ pub(crate) enum PlanStep {
     ServiceNoop(ServiceResource),
     ServiceConflict {
         resource: ServiceResource,
+        reason: String,
+    },
+    ComposeCreate(ComposeResource),
+    ComposeUpdate(ComposeResource),
+    ComposeRemove {
+        resource: ComposeResource,
+        stored_config: String,
+    },
+    ComposeNoop {
+        resource: ComposeResource,
+        fingerprint: String,
+    },
+    ComposeConflict {
+        resource: ComposeResource,
         reason: String,
     },
     FontCreate(FontResource),
@@ -163,6 +181,25 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
             state
                 .resources
                 .insert(service_id_for(resource), state_service(resource));
+        }
+    }
+
+    if compose_available()? {
+        for resource in &config.compose {
+            let id = compose_id_for(resource);
+            let fingerprint = state
+                .resources
+                .get(&id)
+                .and_then(compose_from_state)
+                .map(|(_, fingerprint)| fingerprint);
+            if compose_current(resource, fingerprint)? {
+                let fingerprint = fingerprint
+                    .expect("current compose resource has a fingerprint")
+                    .to_string();
+                state
+                    .resources
+                    .insert(id, state_compose(resource, fingerprint));
+            }
         }
     }
 
@@ -308,6 +345,34 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                 resource: resource.clone(),
                 provider: provider.clone(),
             });
+        }
+    }
+
+    let compose_is_available = compose_available()?;
+    for resource in &config.compose {
+        let id = compose_id_for(resource);
+        declared.insert(id.clone());
+        let stored = state.resources.get(&id).and_then(compose_from_state);
+        if !compose_is_available {
+            plan.push(PlanStep::ComposeConflict {
+                resource: resource.clone(),
+                reason: "docker compose is not available".to_string(),
+            });
+        } else if compose_current(
+            resource,
+            stored.as_ref().map(|(_, fingerprint)| *fingerprint),
+        )? {
+            plan.push(PlanStep::ComposeNoop {
+                resource: resource.clone(),
+                fingerprint: stored
+                    .expect("current compose resource has state")
+                    .1
+                    .to_string(),
+            });
+        } else if state.resources.contains_key(&id) {
+            plan.push(PlanStep::ComposeUpdate(resource.clone()));
+        } else {
+            plan.push(PlanStep::ComposeCreate(resource.clone()));
         }
     }
 
@@ -478,6 +543,21 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                         resource,
                         reason: format!("{provider} service provider is not configured"),
                     }),
+                }
+            }
+            StateResource::Compose { .. } => {
+                let (resource, stored_config) =
+                    compose_from_state(resource).expect("compose state resource");
+                if compose_is_available {
+                    plan.push(PlanStep::ComposeRemove {
+                        resource,
+                        stored_config: stored_config.to_string(),
+                    });
+                } else {
+                    plan.push(PlanStep::ComposeConflict {
+                        resource,
+                        reason: "docker compose is not available".to_string(),
+                    });
                 }
             }
             StateResource::Group { name } => {
