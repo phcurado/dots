@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.7.1
+
+### Fixed
+
+- Systemd service discovery now includes timers and other unit types.
+- Active timers are correctly detected instead of repeatedly appearing as pending start and enable operations.
+
 ## 0.7.0
 
 `0.7.0` adds declarative Docker Compose applications and managed systemd unit files.

@@ -7,6 +7,6 @@ dots.provider.service("systemd", {
 	enabled = 'systemctl is-enabled --quiet "$DOTS_SERVICE"',
 	enable = 'sudo systemctl enable "$DOTS_SERVICE"',
 	disable = 'sudo systemctl disable "$DOTS_SERVICE"',
-	list_started = "systemctl list-units --type=service --state=running --no-legend --no-pager | awk '{ print $1 }'",
-	list_enabled = "systemctl list-unit-files --type=service --no-legend --no-pager | awk '$2 ~ /^(enabled|enabled-runtime|linked|linked-runtime)$/ { print $1 }'",
+	list_started = "systemctl list-units --state=active --no-legend --no-pager | awk '{ print $1 }'",
+	list_enabled = "systemctl list-unit-files --no-legend --no-pager | awk '$2 ~ /^(enabled|enabled-runtime|linked|linked-runtime)$/ { print $1 }'",
 })

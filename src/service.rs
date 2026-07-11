@@ -258,6 +258,26 @@ mod tests {
     }
 
     #[test]
+    fn active_enabled_timer_is_found_in_provider_inventories() {
+        let mut provider = provider();
+        provider.list_started = Some("printf '%s\\n' automatic-timezone.timer".to_string());
+        provider.list_enabled = Some("printf '%s\\n' automatic-timezone.timer".to_string());
+        let started = ServiceResource {
+            provider: "fake".to_string(),
+            action: ServiceAction::Start,
+            name: "automatic-timezone.timer".to_string(),
+        };
+        let enabled = ServiceResource {
+            action: ServiceAction::Enable,
+            ..started.clone()
+        };
+        let mut cache = ServiceStatusCache::default();
+
+        assert!(service_current_cached(&mut cache, &provider, &started).unwrap());
+        assert!(service_current_cached(&mut cache, &provider, &enabled).unwrap());
+    }
+
+    #[test]
     fn current_status_uses_enabled_list() {
         let mut provider = provider();
         provider.list_enabled =

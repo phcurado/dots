@@ -1020,6 +1020,16 @@ mod tests {
         let config = load_config(&project, "test").unwrap();
 
         assert!(config.service_providers.contains_key("systemd"));
+        let systemd = &config.service_providers["systemd"];
+        assert!(systemd.list_started.as_deref().is_some_and(|command| {
+            command.contains("--state=active") && !command.contains("--type=service")
+        }));
+        assert!(
+            systemd
+                .list_enabled
+                .as_deref()
+                .is_some_and(|command| !command.contains("--type=service"))
+        );
         assert!(config.service_providers.contains_key("brew-service"));
         assert_eq!(config.services.len(), 3);
         assert!(config.services.iter().any(|service| {
