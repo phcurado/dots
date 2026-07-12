@@ -8,6 +8,7 @@ use mlua::{Lua, Table, Value};
 use crate::command::CommandResource;
 use crate::docker::ComposeResource;
 use crate::font::{FontResource, expand_font_source};
+use crate::managed_file::FileResource;
 use crate::managed_output::{OutputDeclaration, output_value_from_lua};
 use crate::package::{
     PackageList, PackageListFormat, PackageMatcher, PackageProvider, PackageResource,
@@ -32,6 +33,7 @@ pub(crate) struct Config {
     pub(crate) systemd_units: Vec<SystemdUnitResource>,
     pub(crate) compose: Vec<ComposeResource>,
     pub(crate) fonts: Vec<FontResource>,
+    pub(crate) files: Vec<FileResource>,
     pub(crate) commands: Vec<CommandResource>,
     pub(crate) outputs: Vec<OutputDeclaration>,
     pub(crate) package_providers: BTreeMap<String, PackageProvider>,
@@ -49,6 +51,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let systemd_units = lua.create_table()?;
     let compose_resources = lua.create_table()?;
     let font_sources = lua.create_table()?;
+    let files = lua.create_table()?;
     let commands = lua.create_table()?;
     let output_declarations = lua.create_table()?;
     let system_groups = lua.create_table()?;
@@ -98,6 +101,30 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         Ok(())
     })?;
     fonts.set("install", fonts_install)?;
+
+    let collected_files = files.clone();
+    let root = project.root.clone();
+    let file = lua.create_function(move |lua, (target, spec): (String, Table)| {
+        let item = lua.create_table()?;
+        item.set("target", expand_home(&target).display().to_string())?;
+        let source = spec.get::<String>("source")?;
+        item.set(
+            "source",
+            resolve_source(&root, &source).display().to_string(),
+        )?;
+        if let Some(mode) = spec.get::<Option<String>>("mode")? {
+            let mode = u32::from_str_radix(&mode, 8)
+                .map_err(|_| mlua::Error::RuntimeError(format!("invalid file mode: {mode}")))?;
+            if mode > 0o7777 {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "invalid file mode: {mode:o}"
+                )));
+            }
+            item.set("mode", mode)?;
+        }
+        collected_files.raw_push(item)?;
+        Ok(())
+    })?;
 
     let collected_commands = commands.clone();
     let command = lua.create_function(move |lua, (name, spec): (String, Table)| {
@@ -197,6 +224,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     dots.set("symlink", symlink)?;
     dots.set("docker", docker)?;
     dots.set("fonts", fonts)?;
+    dots.set("file", file)?;
     dots.set("command", command)?;
     dots.set("output", output)?;
     dots.set("group", group)?;
@@ -296,6 +324,14 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         config
             .fonts
             .extend(expand_font_source(&project.root, Some(&source?))?);
+    }
+    for item in files.sequence_values::<Table>() {
+        let item = item?;
+        config.files.push(FileResource {
+            target: PathBuf::from(item.get::<String>("target")?),
+            source: PathBuf::from(item.get::<String>("source")?),
+            mode: item.get::<Option<u32>>("mode")?,
+        });
     }
     for item in commands.sequence_values::<Table>() {
         let item = item?;
@@ -433,6 +469,29 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
         }
     }
     config.symlinks = symlinks.into_values().collect();
+
+    let symlink_targets = config
+        .symlinks
+        .iter()
+        .map(|resource| resource.target.clone())
+        .collect::<BTreeSet<_>>();
+    let mut files = BTreeMap::<PathBuf, FileResource>::new();
+    for resource in config.files.drain(..) {
+        if symlink_targets.contains(&resource.target) {
+            bail!(
+                "target is declared as both file and symlink: {}",
+                resource.target.display()
+            );
+        }
+        match files.get(&resource.target) {
+            Some(existing) if existing == &resource => {}
+            Some(_) => bail!("duplicate file target: {}", resource.target.display()),
+            None => {
+                files.insert(resource.target.clone(), resource);
+            }
+        }
+    }
+    config.files = files.into_values().collect();
 
     let mut package_ids = BTreeSet::new();
     config

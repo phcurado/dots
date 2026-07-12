@@ -35,4 +35,4 @@ Read one value:
 dots output machine_name
 ```
 
-Run `dots check` or `dots apply` after changing output declarations to refresh their stored values.
+outputs are stored into `dots` state after running `dots check` or `dots apply`.

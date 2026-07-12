@@ -11,6 +11,7 @@ use crate::docker::{
     state_compose,
 };
 use crate::font::{FontResource, font_matches, state_font};
+use crate::managed_file::{FileResource, FileStatus, file_id_for, inspect_file, state_file};
 use crate::package::{
     PackageProvider, PackageResource, PackageStatusCache, package_installed_cached,
     package_provider_available, package_provides,
@@ -117,6 +118,17 @@ pub(crate) enum PlanStep {
     FontNoop(FontResource),
     FontConflict {
         resource: FontResource,
+        reason: String,
+    },
+    FileCreate(FileResource),
+    FileUpdate(FileResource),
+    FileModeUpdate(FileResource),
+    FileNoop(FileResource),
+    FileForget {
+        target: PathBuf,
+    },
+    FileConflict {
+        resource: FileResource,
         reason: String,
     },
     UserShellUpdate {
@@ -231,6 +243,14 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
             state
                 .resources
                 .insert(font_id_for(resource), state_font(resource));
+        }
+    }
+
+    for resource in &config.files {
+        if inspect_file(resource)? == FileStatus::Current {
+            state
+                .resources
+                .insert(file_id_for(resource), state_file(resource)?);
         }
     }
 
@@ -427,6 +447,54 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    for resource in &config.files {
+        let id = file_id_for(resource);
+        declared.insert(id.clone());
+        let owned = state.resources.contains_key(&id);
+        let source = match fs::symlink_metadata(&resource.source) {
+            Ok(metadata) if metadata.is_file() => true,
+            Ok(_) => {
+                plan.push(PlanStep::FileConflict {
+                    resource: resource.clone(),
+                    reason: "source is not a regular file".to_string(),
+                });
+                false
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                plan.push(PlanStep::FileConflict {
+                    resource: resource.clone(),
+                    reason: format!("source does not exist: {}", resource.source.display()),
+                });
+                false
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !source {
+            continue;
+        }
+
+        match inspect_file(resource)? {
+            FileStatus::Missing => plan.push(PlanStep::FileCreate(resource.clone())),
+            FileStatus::Current => plan.push(PlanStep::FileNoop(resource.clone())),
+            FileStatus::ModeChanged if owned => {
+                plan.push(PlanStep::FileModeUpdate(resource.clone()))
+            }
+            FileStatus::ContentChanged | FileStatus::ContentAndModeChanged if owned => {
+                plan.push(PlanStep::FileUpdate(resource.clone()))
+            }
+            FileStatus::ContentChanged
+            | FileStatus::ModeChanged
+            | FileStatus::ContentAndModeChanged => plan.push(PlanStep::FileConflict {
+                resource: resource.clone(),
+                reason: "target exists but is not managed".to_string(),
+            }),
+            FileStatus::Conflict => plan.push(PlanStep::FileConflict {
+                resource: resource.clone(),
+                reason: "target is not a regular file".to_string(),
+            }),
+        }
+    }
+
     for resource in &config.fonts {
         let id = font_id_for(resource);
         declared.insert(id.clone());
@@ -557,6 +625,9 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             }
             StateResource::Font { source, target } => plan.push(PlanStep::FontRemove {
                 source: source.clone(),
+                target: target.clone(),
+            }),
+            StateResource::File { target, .. } => plan.push(PlanStep::FileForget {
                 target: target.clone(),
             }),
             StateResource::Package { provider, name } => {

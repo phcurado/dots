@@ -557,3 +557,116 @@ fn outputs_are_stored_and_read_as_typed_values() {
     assert!(stdout.contains("ports = [80,443]"));
     assert!(stdout.contains("settings = {\"enabled\":true,\"retries\":3}"));
 }
+
+#[test]
+fn managed_file_is_created_updated_and_forgotten_without_deletion() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_dir("cli-managed-file");
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(root.join("files")).unwrap();
+    fs::write(root.join("files/ssh-config"), "Host github.com\n").unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.file("~/.ssh/config", { source = "files/ssh-config", mode = "0600" })"#,
+    )
+    .unwrap();
+
+    let check = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(check.status.success());
+    assert!(
+        String::from_utf8(check.stdout)
+            .unwrap()
+            .contains("+ ~/.ssh/config")
+    );
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let target = home.join(".ssh/config");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "Host github.com\n");
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    fs::write(root.join("files/ssh-config"), "Host gitlab.com\n").unwrap();
+    let update = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(update.status.success());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "Host gitlab.com\n");
+
+    fs::write(root.join("dots.lua"), "").unwrap();
+    let forget = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(forget.status.success());
+    assert!(target.exists());
+    assert!(
+        String::from_utf8(forget.stdout)
+            .unwrap()
+            .contains("1 forgotten")
+    );
+}
+
+#[test]
+fn managed_file_adopts_identical_target_and_conflicts_with_different_target() {
+    let root = temp_dir("cli-managed-file-adoption");
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(root.join("source"), "same\n").unwrap();
+    fs::write(home.join("target"), "same\n").unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.file("~/target", { source = "source" })"#,
+    )
+    .unwrap();
+
+    let adopted = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(adopted.status.success());
+    assert!(
+        String::from_utf8(adopted.stdout)
+            .unwrap()
+            .contains("No changes.")
+    );
+
+    fs::write(home.join("target"), "different\n").unwrap();
+    fs::remove_dir_all(root.join(".dots")).unwrap();
+    let conflict = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(conflict.status.success());
+    let stdout = String::from_utf8(conflict.stdout).unwrap();
+    assert!(stdout.contains("Files:"));
+    assert!(stdout.contains("target exists but is not managed"));
+}

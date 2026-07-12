@@ -19,6 +19,7 @@ export default defineConfig({
         text: "Managing a machine",
         items: [
           { text: "Symlinks", link: "/symlinks" },
+          { text: "Files", link: "/files" },
           { text: "Packages", link: "/packages" },
           { text: "Services", link: "/services" },
           { text: "Docker Compose", link: "/docker-compose" },

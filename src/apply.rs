@@ -8,6 +8,7 @@ use crate::docker::{
     ComposeResource, compose_apply, compose_id_for, compose_remove, state_compose,
 };
 use crate::font::{FontResource, apply_font, refresh_font_cache, remove_font, state_font};
+use crate::managed_file::{apply_file, apply_file_mode, file_id_for, state_file};
 use crate::output::{apply_with_status, bold, display_target, green, red, summarize_plan, yellow};
 use crate::package::{
     PackageProvider, PackageResource, package_provider_available, package_provides,
@@ -203,6 +204,28 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .insert(font_id_for(resource), state_font(resource));
             }
+            PlanStep::FileCreate(resource) | PlanStep::FileUpdate(resource) => apply_with_status(
+                "Writing",
+                "Write",
+                &format!("file.{}", display_target(&resource.target)),
+                || apply_file(resource, state),
+            )?,
+            PlanStep::FileModeUpdate(resource) => apply_with_status(
+                "Updating",
+                "Update",
+                &format!("file.{}", display_target(&resource.target)),
+                || apply_file_mode(resource, state),
+            )?,
+            PlanStep::FileNoop(resource) => {
+                state
+                    .resources
+                    .insert(file_id_for(resource), state_file(resource)?);
+            }
+            PlanStep::FileForget { target } => {
+                state
+                    .resources
+                    .remove(&format!("file:{}", target.display()));
+            }
             PlanStep::CommandCreate(resource) => apply_with_status(
                 "Running",
                 "Run",
@@ -248,6 +271,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
             | PlanStep::SystemdUnitConflict { .. }
             | PlanStep::ComposeConflict { .. }
             | PlanStep::FontConflict { .. }
+            | PlanStep::FileConflict { .. }
             | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
             | PlanStep::CapabilityConflict { .. } => unreachable!(),
@@ -263,8 +287,13 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
     } else {
         String::new()
     };
+    let forget_text = if summary.forget > 0 {
+        format!("{} forgotten, ", yellow(&summary.forget.to_string()))
+    } else {
+        String::new()
+    };
     println!(
-        "{} {import_text}{} created, {} updated, {} destroyed.",
+        "{} {import_text}{forget_text}{} created, {} updated, {} destroyed.",
         bold("Apply complete:"),
         green(&summary.create.to_string()),
         yellow(&summary.update.to_string()),
@@ -452,6 +481,10 @@ fn is_apply_step(step: &PlanStep) -> bool {
             | PlanStep::FontCreate(_)
             | PlanStep::FontUpdate(_)
             | PlanStep::FontRemove { .. }
+            | PlanStep::FileCreate(_)
+            | PlanStep::FileUpdate(_)
+            | PlanStep::FileModeUpdate(_)
+            | PlanStep::FileForget { .. }
             | PlanStep::UserShellUpdate { .. }
             | PlanStep::SystemGroupCreate(_)
             | PlanStep::SystemGroupRemove(_)

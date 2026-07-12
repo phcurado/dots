@@ -22,11 +22,12 @@ pub(crate) struct PlanSummary {
     pub(crate) remove: usize,
     pub(crate) conflicts: usize,
     pub(crate) symlink_candidates: usize,
+    pub(crate) forget: usize,
 }
 
 impl PlanSummary {
     pub(crate) fn total_changes(&self) -> usize {
-        self.create + self.update + self.remove + self.symlink_candidates
+        self.create + self.update + self.remove + self.symlink_candidates + self.forget
     }
 }
 
@@ -105,6 +106,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::SystemdUnitCreate(_)
             | PlanStep::ComposeCreate(_)
             | PlanStep::FontCreate(_)
+            | PlanStep::FileCreate(_)
             | PlanStep::SystemGroupCreate(_)
             | PlanStep::UserGroupAdd(_)
             | PlanStep::CommandCreate(_) => summary.create += 1,
@@ -112,6 +114,8 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::SystemdUnitUpdate(_)
             | PlanStep::ComposeUpdate(_)
             | PlanStep::FontUpdate(_)
+            | PlanStep::FileUpdate(_)
+            | PlanStep::FileModeUpdate(_)
             | PlanStep::UserShellUpdate { .. } => summary.update += 1,
             PlanStep::SymlinkRemove { .. }
             | PlanStep::PackageRemove { .. }
@@ -127,16 +131,19 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::SystemdUnitConflict { .. }
             | PlanStep::ComposeConflict { .. }
             | PlanStep::FontConflict { .. }
+            | PlanStep::FileConflict { .. }
             | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
             | PlanStep::CapabilityConflict { .. } => summary.conflicts += 1,
             PlanStep::SymlinkCandidate(_) => summary.symlink_candidates += 1,
+            PlanStep::FileForget { .. } => summary.forget += 1,
             PlanStep::SymlinkNoop(_)
             | PlanStep::PackageNoop { .. }
             | PlanStep::ServiceNoop(_)
             | PlanStep::SystemdUnitNoop(_)
             | PlanStep::ComposeNoop { .. }
             | PlanStep::FontNoop(_)
+            | PlanStep::FileNoop(_)
             | PlanStep::UserShellNoop
             | PlanStep::SystemGroupNoop(_)
             | PlanStep::UserGroupNoop(_)
@@ -283,11 +290,47 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
+    let has_files = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::FileCreate(_)
+                | PlanStep::FileUpdate(_)
+                | PlanStep::FileModeUpdate(_)
+                | PlanStep::FileForget { .. }
+                | PlanStep::FileConflict { .. }
+        )
+    });
+    if has_files {
+        if has_capabilities || has_symlinks || has_packages || has_fonts {
+            println!();
+        }
+        println!("{}", bold("Files:"));
+        for step in plan {
+            match step {
+                PlanStep::FileCreate(resource) => {
+                    println!("  {} {}", green("+"), display_target(&resource.target))
+                }
+                PlanStep::FileUpdate(resource) | PlanStep::FileModeUpdate(resource) => {
+                    println!("  {} {}", yellow("~"), display_target(&resource.target))
+                }
+                PlanStep::FileForget { target } => {
+                    println!("  {} forget {}", yellow("~"), display_target(target))
+                }
+                PlanStep::FileConflict { resource, reason } => println!(
+                    "  {} {} ({reason})",
+                    red("!"),
+                    display_target(&resource.target)
+                ),
+                _ => {}
+            }
+        }
+    }
+
     let has_commands = plan
         .iter()
         .any(|step| matches!(step, PlanStep::CommandCreate(_)));
     if has_commands {
-        if has_capabilities || has_symlinks || has_packages || has_fonts {
+        if has_capabilities || has_symlinks || has_packages || has_fonts || has_files {
             println!();
         }
         println!("{}", bold("Commands:"));
@@ -308,7 +351,13 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_systemd_units {
-        if has_capabilities || has_symlinks || has_packages || has_fonts || has_commands {
+        if has_capabilities
+            || has_symlinks
+            || has_packages
+            || has_fonts
+            || has_files
+            || has_commands
+        {
             println!();
         }
         println!("{}", bold("Systemd:"));
@@ -345,6 +394,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_files
             || has_commands
             || has_systemd_units
         {
@@ -383,6 +433,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_files
             || has_commands
             || has_compose
         {
@@ -430,6 +481,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_files
             || has_commands
             || has_services
         {
@@ -466,6 +518,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_files
             || has_commands
             || has_services
             || has_groups
@@ -507,8 +560,13 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
     } else {
         String::new()
     };
+    let forget_text = if summary.forget > 0 {
+        format!("{} to forget, ", yellow(&summary.forget.to_string()))
+    } else {
+        String::new()
+    };
     println!(
-        "{} {import_text}{} to create, {} to update, {} to destroy{}",
+        "{} {import_text}{forget_text}{} to create, {} to update, {} to destroy{}",
         bold("Check:"),
         green(&summary.create.to_string()),
         yellow(&summary.update.to_string()),
@@ -554,6 +612,7 @@ pub(crate) fn print_state(project: &Project, state: &State) {
                 println!("  docker compose {name} {}", display_source(project, file))
             }
             StateResource::Font { target, .. } => println!("  font {}", display_target(target)),
+            StateResource::File { target, .. } => println!("  file {}", display_target(target)),
             StateResource::Group { name } => println!("  group {name}"),
             StateResource::UserGroup { name } => println!("  user group {name}"),
         }

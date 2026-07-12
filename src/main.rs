@@ -3,6 +3,7 @@ mod command;
 mod config;
 mod docker;
 mod font;
+mod managed_file;
 mod managed_output;
 mod output;
 mod package;

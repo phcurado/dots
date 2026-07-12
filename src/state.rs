@@ -33,6 +33,13 @@ pub(crate) enum StateResource {
     },
     #[serde(rename = "font")]
     Font { source: PathBuf, target: PathBuf },
+    #[serde(rename = "file")]
+    File {
+        target: PathBuf,
+        source: PathBuf,
+        source_digest: String,
+        mode: Option<u32>,
+    },
     #[serde(rename = "group")]
     Group { name: String },
     #[serde(rename = "user-group")]
@@ -54,6 +61,7 @@ impl StateResource {
         "systemd-unit:",
         "compose:",
         "font:",
+        "file:",
         "group:",
         "user-group:",
     ];
