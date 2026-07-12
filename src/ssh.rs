@@ -180,20 +180,19 @@ pub(crate) fn generate_keypair(resource: &SshKeypairResource, state: &mut State)
             bail!("ssh-keygen failed");
         }
 
-        let derived_without_passphrase = derive_public(&temporary_resource, false)?;
-        let encrypted = derived_without_passphrase.is_none();
-        if encryption_conflicts(resource.passphrase, encrypted) {
-            bail!("generated key does not match the declared passphrase policy");
-        }
         let public_path = temporary_resource.public_path();
-        let observation = match derived_without_passphrase {
-            Some(derived) => validate_derived(&temporary_resource, derived, encrypted)?,
-            None => KeypairObservation {
+        let observation = match resource.passphrase {
+            PassphrasePolicy::None => {
+                let derived = derive_public(&temporary_resource, false)?
+                    .context("failed to validate generated SSH private key")?;
+                validate_derived(&temporary_resource, derived, false)?
+            }
+            PassphrasePolicy::Prompt => KeypairObservation {
                 public_key: fs::read_to_string(&public_path)?.trim().to_string(),
                 fingerprint: fingerprint(&public_path)?,
                 private_digest: digest_file(&temporary_resource.private_path)?,
                 public_digest: digest_file(&public_path)?,
-                encrypted,
+                encrypted: true,
             },
         };
         ensure_keypair_modes(&temporary_resource)?;

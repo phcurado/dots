@@ -8,11 +8,11 @@ Declare an ED25519 keypair with an explicit path and passphrase policy:
 local key = dots.ssh.keypair("personal", {
   path = "~/.ssh/id_ed25519",
   comment = "me@example.com",
-  passphrase = "prompt",
+  passphrase = true,
 })
 ```
 
-Use `passphrase = false` to generate an unencrypted key. With `"prompt"`, `dots apply` lets `ssh-keygen` prompt without storing the passphrase in configuration or state.
+Use `passphrase = true` to let `ssh-keygen` prompt during apply. Use `false` to generate an unencrypted key. Dots never stores the passphrase in configuration or state.
 
 Dots generates a keypair only when both files are absent. An existing matching keypair is adopted. If one half is missing or the two files do not match, dots reports a conflict and does not overwrite either file.
 

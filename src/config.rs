@@ -154,14 +154,9 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let collected_ssh_keypairs = ssh_keypairs.clone();
     let keypair = lua.create_function(move |lua, (name, spec): (String, Table)| {
         let path = expand_home(&spec.get::<String>("path")?);
-        let passphrase = match spec.get::<Value>("passphrase")? {
-            Value::Boolean(false) => "none",
-            Value::String(value) if value.to_string_lossy() == "prompt" => "prompt",
-            _ => {
-                return Err(mlua::Error::RuntimeError(
-                    "SSH keypair passphrase must be false or \"prompt\"".to_string(),
-                ));
-            }
+        let passphrase = match spec.get::<bool>("passphrase")? {
+            false => "none",
+            true => "prompt",
         };
         let item = lua.create_table()?;
         item.set("name", name.clone())?;

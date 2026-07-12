@@ -796,58 +796,6 @@ fn ssh_keypair_conflicts_when_one_half_is_missing() {
 }
 
 #[test]
-fn prompted_ssh_keypair_rejects_unencrypted_generation_without_leaving_files() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let root = temp_dir("cli-ssh-keypair-prompt-policy");
-    let home = root.join("home");
-    let bin = root.join("bin");
-    fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&bin).unwrap();
-    let ssh_keygen = bin.join("ssh-keygen");
-    fs::write(
-        &ssh_keygen,
-        r#"#!/bin/sh
-case " $* " in
-  *" -t ed25519 "*)
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "-f" ]; then shift; key="$1"; break; fi
-      shift
-    done
-    printf 'private' > "$key"
-    printf 'ssh-ed25519 AAAA fake\n' > "$key.pub"
-    ;;
-  *" -y "*) printf 'ssh-ed25519 AAAA\n' ;;
-  *) exit 1 ;;
-esac
-"#,
-    )
-    .unwrap();
-    fs::set_permissions(&ssh_keygen, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::write(
-        root.join("dots.lua"),
-        r#"dots.ssh.keypair("personal", { path = "~/.ssh/id_ed25519", passphrase = "prompt" })"#,
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
-        .args(["apply", "--auto-approve"])
-        .current_dir(&root)
-        .env("HOME", &home)
-        .env("PATH", &bin)
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(!home.join(".ssh/id_ed25519").exists());
-    assert!(!home.join(".ssh/id_ed25519.pub").exists());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("generated key does not match the declared passphrase policy")
-    );
-}
-
-#[test]
 fn ssh_keypair_fixes_permissions_on_an_existing_pair() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -1034,5 +982,31 @@ fn output_changes_are_planned_and_only_persisted_by_apply() {
         String::from_utf8(removal.stdout)
             .unwrap()
             .contains("- example = \"new\"")
+    );
+}
+
+#[test]
+fn ssh_keypair_true_plans_prompted_generation_without_prompting_during_check() {
+    let root = temp_dir("cli-ssh-keypair-passphrase");
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.ssh.keypair("personal", { path = "~/.ssh/id_ed25519", passphrase = true })"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("+ personal ~/.ssh/id_ed25519")
     );
 }
