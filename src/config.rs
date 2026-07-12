@@ -9,7 +9,7 @@ use crate::command::CommandResource;
 use crate::docker::ComposeResource;
 use crate::font::{FontResource, expand_font_source};
 use crate::managed_file::FileResource;
-use crate::managed_output::{OutputDeclaration, output_value_from_lua};
+use crate::managed_output::{OutputDeclaration, ResourceAttributeReference, output_value_from_lua};
 use crate::package::{
     PackageList, PackageListFormat, PackageMatcher, PackageProvider, PackageResource,
 };
@@ -17,6 +17,7 @@ use crate::plan::package_id_for;
 use crate::platform::platform_table;
 use crate::project::Project;
 use crate::service::{ServiceAction, ServiceProvider, ServiceResource};
+use crate::ssh::{PassphrasePolicy, SshKeypairResource};
 use crate::symlink::{
     SymlinkDeclaration, SymlinkResource, expand_home, expand_symlink_declaration, resolve_source,
     same_path,
@@ -36,6 +37,7 @@ pub(crate) struct Config {
     pub(crate) files: Vec<FileResource>,
     pub(crate) commands: Vec<CommandResource>,
     pub(crate) outputs: Vec<OutputDeclaration>,
+    pub(crate) ssh_keypairs: Vec<SshKeypairResource>,
     pub(crate) package_providers: BTreeMap<String, PackageProvider>,
     pub(crate) service_providers: BTreeMap<String, ServiceProvider>,
     pub(crate) user: UserConfig,
@@ -54,6 +56,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let files = lua.create_table()?;
     let commands = lua.create_table()?;
     let output_declarations = lua.create_table()?;
+    let ssh_keypairs = lua.create_table()?;
     let system_groups = lua.create_table()?;
     let user_groups = lua.create_table()?;
     let user_shell = lua.create_table()?;
@@ -147,6 +150,48 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         Ok(reference)
     })?;
 
+    let ssh = lua.create_table()?;
+    let collected_ssh_keypairs = ssh_keypairs.clone();
+    let keypair = lua.create_function(move |lua, (name, spec): (String, Table)| {
+        let path = expand_home(&spec.get::<String>("path")?);
+        let passphrase = match spec.get::<Value>("passphrase")? {
+            Value::Boolean(false) => "none",
+            Value::String(value) if value.to_string_lossy() == "prompt" => "prompt",
+            _ => {
+                return Err(mlua::Error::RuntimeError(
+                    "SSH keypair passphrase must be false or \"prompt\"".to_string(),
+                ));
+            }
+        };
+        let item = lua.create_table()?;
+        item.set("name", name.clone())?;
+        item.set("path", path.display().to_string())?;
+        item.set("passphrase", passphrase)?;
+        if let Some(comment) = spec.get::<Option<String>>("comment")? {
+            item.set("comment", comment)?;
+        }
+        collected_ssh_keypairs.raw_push(item)?;
+
+        let handle = lua.create_table()?;
+        let id = format!("ssh-keypair:{name}");
+        handle.set(
+            "public_key",
+            lua.create_userdata(ResourceAttributeReference {
+                resource_id: id.clone(),
+                attribute: "public_key".to_string(),
+            })?,
+        )?;
+        handle.set(
+            "fingerprint",
+            lua.create_userdata(ResourceAttributeReference {
+                resource_id: id,
+                attribute: "fingerprint".to_string(),
+            })?,
+        )?;
+        Ok(handle)
+    })?;
+    ssh.set("keypair", keypair)?;
+
     let collected_outputs = output_declarations.clone();
     let output = lua.create_function(move |lua, (name, spec): (String, Table)| {
         if name.is_empty() {
@@ -227,6 +272,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     dots.set("file", file)?;
     dots.set("command", command)?;
     dots.set("output", output)?;
+    dots.set("ssh", ssh)?;
     dots.set("group", group)?;
     dots.set("user", user)?;
     dots.set("profile", profile)?;
@@ -341,6 +387,19 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             apply: item.get::<String>("apply")?,
             needs: table_references(item.get::<Option<Table>>("needs")?)?,
             provides: table_references(item.get::<Option<Table>>("provides")?)?,
+        });
+    }
+    for item in ssh_keypairs.sequence_values::<Table>() {
+        let item = item?;
+        config.ssh_keypairs.push(SshKeypairResource {
+            name: item.get::<String>("name")?,
+            private_path: PathBuf::from(item.get::<String>("path")?),
+            comment: item.get::<Option<String>>("comment")?,
+            passphrase: match item.get::<String>("passphrase")?.as_str() {
+                "none" => PassphrasePolicy::None,
+                "prompt" => PassphrasePolicy::Prompt,
+                _ => unreachable!(),
+            },
         });
     }
     let mut output_names = BTreeSet::new();
@@ -535,6 +594,20 @@ fn dedupe_config(config: &mut Config) -> Result<()> {
     config
         .fonts
         .retain(|resource| font_ids.insert(crate::plan::font_id_for(resource)));
+
+    let mut keypair_names = BTreeSet::new();
+    let mut keypair_paths = BTreeSet::new();
+    for resource in &config.ssh_keypairs {
+        if !keypair_names.insert(resource.name.clone()) {
+            bail!("duplicate SSH keypair: {}", resource.name);
+        }
+        if !keypair_paths.insert(resource.private_path.clone()) {
+            bail!(
+                "duplicate SSH keypair path: {}",
+                resource.private_path.display()
+            );
+        }
+    }
 
     let mut command_names = BTreeMap::<String, CommandResource>::new();
     let mut commands = Vec::new();

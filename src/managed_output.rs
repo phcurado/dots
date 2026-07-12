@@ -1,19 +1,39 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use mlua::{Table, Value as LuaValue};
+use mlua::{Table, UserData, Value as LuaValue};
 use serde_json::{Map, Value};
 
 use crate::state::State;
 
 #[derive(Debug, Clone)]
-pub(crate) struct OutputDeclaration {
-    pub(crate) name: String,
-    pub(crate) value: Value,
+pub(crate) enum OutputValue {
+    Literal(Value),
+    ResourceAttribute(ResourceAttributeReference),
 }
 
-pub(crate) fn output_value_from_lua(value: LuaValue) -> mlua::Result<Value> {
-    json_from_lua(value)
+#[derive(Debug, Clone)]
+pub(crate) struct OutputDeclaration {
+    pub(crate) name: String,
+    pub(crate) value: OutputValue,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResourceAttributeReference {
+    pub(crate) resource_id: String,
+    pub(crate) attribute: String,
+}
+
+impl UserData for ResourceAttributeReference {}
+
+pub(crate) fn output_value_from_lua(value: LuaValue) -> mlua::Result<OutputValue> {
+    if let LuaValue::UserData(value) = &value {
+        let reference = value.borrow::<ResourceAttributeReference>().map_err(|_| {
+            mlua::Error::RuntimeError("output values must be JSON-compatible".to_string())
+        })?;
+        return Ok(OutputValue::ResourceAttribute(reference.clone()));
+    }
+    Ok(OutputValue::Literal(json_from_lua(value)?))
 }
 
 fn json_from_lua(value: LuaValue) -> mlua::Result<Value> {
@@ -81,11 +101,48 @@ fn json_from_table(table: Table) -> mlua::Result<Value> {
     Ok(Value::Object(object))
 }
 
-pub(crate) fn sync_outputs(declarations: &[OutputDeclaration], state: &mut State) -> Result<()> {
+pub(crate) fn resolve_outputs(
+    declarations: &[OutputDeclaration],
+    state: &State,
+) -> Result<BTreeMap<String, Value>> {
     let mut outputs = BTreeMap::new();
     for declaration in declarations {
-        outputs.insert(declaration.name.clone(), declaration.value.clone());
+        let value = match &declaration.value {
+            OutputValue::Literal(value) => Some(value.clone()),
+            OutputValue::ResourceAttribute(reference) => {
+                resolve_resource_attribute(state, reference)?
+            }
+        };
+        if let Some(value) = value {
+            outputs.insert(declaration.name.clone(), value);
+        }
     }
-    state.outputs = outputs;
+    Ok(outputs)
+}
+
+pub(crate) fn sync_outputs(declarations: &[OutputDeclaration], state: &mut State) -> Result<()> {
+    state.outputs = resolve_outputs(declarations, state)?;
     Ok(())
+}
+
+fn resolve_resource_attribute(
+    state: &State,
+    reference: &ResourceAttributeReference,
+) -> Result<Option<Value>> {
+    let Some(resource) = state.resources.get(&reference.resource_id) else {
+        return Ok(None);
+    };
+    match (resource, reference.attribute.as_str()) {
+        (crate::state::StateResource::SshKeypair { public_key, .. }, "public_key") => {
+            Ok(Some(Value::String(public_key.clone())))
+        }
+        (crate::state::StateResource::SshKeypair { fingerprint, .. }, "fingerprint") => {
+            Ok(Some(Value::String(fingerprint.clone())))
+        }
+        _ => anyhow::bail!(
+            "resource {:?} does not provide attribute {:?}",
+            reference.resource_id,
+            reference.attribute
+        ),
+    }
 }

@@ -538,6 +538,16 @@ fn outputs_are_stored_and_read_as_typed_values() {
         .output()
         .unwrap();
     assert!(check.status.success());
+    let stdout = String::from_utf8(check.stdout).unwrap();
+    assert!(stdout.contains("Outputs:"));
+    assert!(stdout.contains("+ machine_name = \"workstation\""));
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(apply.status.success());
 
     let single = Command::new(env!("CARGO_BIN_EXE_dots"))
         .args(["output", "machine_name"])
@@ -669,4 +679,360 @@ fn managed_file_adopts_identical_target_and_conflicts_with_different_target() {
     let stdout = String::from_utf8(conflict.stdout).unwrap();
     assert!(stdout.contains("Files:"));
     assert!(stdout.contains("target exists but is not managed"));
+}
+
+#[test]
+fn ssh_keypair_generates_publishes_output_and_is_forgotten_without_deletion() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_dir("cli-ssh-keypair");
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        local key = dots.ssh.keypair("personal", {
+          path = "~/.ssh/id_ed25519",
+          comment = "test@example.com",
+          passphrase = false,
+        })
+        dots.output("ssh_public_key", { value = key.public_key })
+        "#,
+    )
+    .unwrap();
+
+    let check = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(check.status.success());
+    let stdout = String::from_utf8(check.stdout).unwrap();
+    assert!(stdout.contains("SSH keypairs:"));
+    assert!(stdout.contains("+ personal ~/.ssh/id_ed25519"));
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let private = home.join(".ssh/id_ed25519");
+    let public = home.join(".ssh/id_ed25519.pub");
+    assert!(private.exists());
+    assert!(public.exists());
+    assert_eq!(
+        fs::metadata(&private).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(&public).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert_eq!(
+        fs::metadata(home.join(".ssh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["output", "ssh_public_key"])
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with("ssh-ed25519 ")
+    );
+
+    fs::write(root.join("dots.lua"), "").unwrap();
+    let forget = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(forget.status.success());
+    assert!(private.exists());
+    assert!(public.exists());
+}
+
+#[test]
+fn ssh_keypair_conflicts_when_one_half_is_missing() {
+    let root = temp_dir("cli-ssh-keypair-half");
+    let home = root.join("home");
+    fs::create_dir_all(home.join(".ssh")).unwrap();
+    fs::write(home.join(".ssh/id_ed25519.pub"), "ssh-ed25519 invalid\n").unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.ssh.keypair("personal", { path = "~/.ssh/id_ed25519", passphrase = false })"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("private key is missing")
+    );
+}
+
+#[test]
+fn prompted_ssh_keypair_rejects_unencrypted_generation_without_leaving_files() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_dir("cli-ssh-keypair-prompt-policy");
+    let home = root.join("home");
+    let bin = root.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let ssh_keygen = bin.join("ssh-keygen");
+    fs::write(
+        &ssh_keygen,
+        r#"#!/bin/sh
+case " $* " in
+  *" -t ed25519 "*)
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-f" ]; then shift; key="$1"; break; fi
+      shift
+    done
+    printf 'private' > "$key"
+    printf 'ssh-ed25519 AAAA fake\n' > "$key.pub"
+    ;;
+  *" -y "*) printf 'ssh-ed25519 AAAA\n' ;;
+  *) exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&ssh_keygen, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.ssh.keypair("personal", { path = "~/.ssh/id_ed25519", passphrase = "prompt" })"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("HOME", &home)
+        .env("PATH", &bin)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!home.join(".ssh/id_ed25519").exists());
+    assert!(!home.join(".ssh/id_ed25519.pub").exists());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("generated key does not match the declared passphrase policy")
+    );
+}
+
+#[test]
+fn ssh_keypair_fixes_permissions_on_an_existing_pair() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_dir("cli-ssh-keypair-permissions");
+    let home = root.join("home");
+    let ssh = home.join(".ssh");
+    fs::create_dir_all(&ssh).unwrap();
+    let private = ssh.join("id_ed25519");
+    let generated = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&private)
+        .status()
+        .unwrap();
+    assert!(generated.success());
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.ssh.keypair("personal", { path = "~/.ssh/id_ed25519", passphrase = false })"#,
+    )
+    .unwrap();
+
+    let check = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(check.status.success());
+    let stdout = String::from_utf8(check.stdout).unwrap();
+    assert!(stdout.contains("(permissions)"), "{stdout}");
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(apply.status.success());
+    assert_eq!(
+        fs::metadata(private).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn encrypted_ssh_keypair_conflicts_with_false_without_prompting() {
+    let root = temp_dir("cli-ssh-keypair-encrypted-policy");
+    let home = root.join("home");
+    let ssh = home.join(".ssh");
+    fs::create_dir_all(&ssh).unwrap();
+    let private = ssh.join("id_ed25519");
+    let generated = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "test-passphrase", "-f"])
+        .arg(&private)
+        .status()
+        .unwrap();
+    assert!(generated.success());
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.ssh.keypair("personal", { path = "~/.ssh/id_ed25519", passphrase = false })"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("private key is encrypted or invalid, but passphrase is false")
+    );
+}
+
+#[test]
+fn ssh_keypair_reports_mismatched_public_key_as_a_conflict() {
+    let root = temp_dir("cli-ssh-keypair-mismatch");
+    let home = root.join("home");
+    let ssh = home.join(".ssh");
+    fs::create_dir_all(&ssh).unwrap();
+    let private = ssh.join("id_ed25519");
+    let other = ssh.join("other");
+    assert!(
+        Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&private)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&other)
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::copy(other.with_extension("pub"), private.with_extension("pub")).unwrap();
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.ssh.keypair("personal", { path = "~/.ssh/id_ed25519", passphrase = false })"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("public key does not match private key")
+    );
+}
+
+#[test]
+fn output_changes_are_planned_and_only_persisted_by_apply() {
+    let root = temp_dir("cli-output-plan");
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.output("example", { value = "old" })"#,
+    )
+    .unwrap();
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_dots"))
+            .args(["apply", "--auto-approve"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    fs::write(
+        root.join("dots.lua"),
+        r#"dots.output("example", { value = "new" })"#,
+    )
+    .unwrap();
+    let check = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(check.status.success());
+    let stdout = String::from_utf8(check.stdout).unwrap();
+    assert!(stdout.contains("~ example: \"old\" → \"new\""));
+
+    let stale = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["output", "example"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(stale.status.success());
+    assert_eq!(String::from_utf8(stale.stdout).unwrap(), "old\n");
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(apply.status.success());
+    let current = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["output", "example"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(current.stdout).unwrap(), "new\n");
+
+    fs::write(root.join("dots.lua"), "").unwrap();
+    let removal = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(removal.status.success());
+    assert!(
+        String::from_utf8(removal.stdout)
+            .unwrap()
+            .contains("- example = \"new\"")
+    );
 }

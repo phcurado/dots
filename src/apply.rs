@@ -19,6 +19,9 @@ use crate::plan::{
     state_package, state_service, state_user_group, user_group_id_for,
 };
 use crate::service::{ServiceProvider, ServiceResource, service_apply, service_remove};
+use crate::ssh::{
+    adopt_keypair, fix_keypair_permissions, generate_keypair, keypair_id_for, state_keypair,
+};
 use crate::state::{State, StateResource};
 use crate::symlink::{
     apply_symlink, apply_symlink_candidate, remove_symlink, state_symlink, symlink_id_for,
@@ -226,6 +229,56 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     .resources
                     .remove(&format!("file:{}", target.display()));
             }
+            PlanStep::SshKeypairCreate(resource) => apply_with_status(
+                "Generating",
+                "Generate",
+                &format!("ssh.keypair.{}", resource.name),
+                || generate_keypair(resource, state),
+            )?,
+            PlanStep::SshKeypairAdopt(resource) => apply_with_status(
+                "Validating",
+                "Validate",
+                &format!("ssh.keypair.{}", resource.name),
+                || adopt_keypair(resource, state),
+            )?,
+            PlanStep::SshKeypairPermissionUpdate {
+                resource,
+                observation,
+            } => apply_with_status(
+                "Updating",
+                "Update",
+                &format!("ssh.keypair.{}", resource.name),
+                || fix_keypair_permissions(resource, observation, state),
+            )?,
+            PlanStep::SshKeypairNoop {
+                resource,
+                observation,
+            } => {
+                state.resources.insert(
+                    keypair_id_for(resource),
+                    state_keypair(resource, observation),
+                );
+            }
+            PlanStep::SshKeypairForget { name } => {
+                state.resources.remove(&format!("ssh-keypair:{name}"));
+            }
+            PlanStep::OutputCreate { name, value }
+            | PlanStep::OutputUpdate {
+                name, after: value, ..
+            } => {
+                if let Some(value) = value {
+                    apply_with_status("Publishing", "Publish", &format!("output.{name}"), || {
+                        state.outputs.insert(name.clone(), value.clone());
+                        Ok(())
+                    })?;
+                }
+            }
+            PlanStep::OutputRemove { name, .. } => {
+                apply_with_status("Removing", "Remove", &format!("output.{name}"), || {
+                    state.outputs.remove(name);
+                    Ok(())
+                })?
+            }
             PlanStep::CommandCreate(resource) => apply_with_status(
                 "Running",
                 "Run",
@@ -272,6 +325,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
             | PlanStep::ComposeConflict { .. }
             | PlanStep::FontConflict { .. }
             | PlanStep::FileConflict { .. }
+            | PlanStep::SshKeypairConflict { .. }
             | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
             | PlanStep::CapabilityConflict { .. } => unreachable!(),
@@ -292,8 +346,21 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
     } else {
         String::new()
     };
+    let output_text = if summary.output_changes > 0 {
+        format!(
+            "{} {}, ",
+            yellow(&summary.output_changes.to_string()),
+            if summary.output_changes == 1 {
+                "output changed"
+            } else {
+                "outputs changed"
+            }
+        )
+    } else {
+        String::new()
+    };
     println!(
-        "{} {import_text}{forget_text}{} created, {} updated, {} destroyed.",
+        "{} {import_text}{forget_text}{output_text}{} created, {} updated, {} destroyed.",
         bold("Apply complete:"),
         green(&summary.create.to_string()),
         yellow(&summary.update.to_string()),
@@ -485,6 +552,13 @@ fn is_apply_step(step: &PlanStep) -> bool {
             | PlanStep::FileUpdate(_)
             | PlanStep::FileModeUpdate(_)
             | PlanStep::FileForget { .. }
+            | PlanStep::SshKeypairCreate(_)
+            | PlanStep::SshKeypairAdopt(_)
+            | PlanStep::SshKeypairPermissionUpdate { .. }
+            | PlanStep::SshKeypairForget { .. }
+            | PlanStep::OutputCreate { .. }
+            | PlanStep::OutputUpdate { .. }
+            | PlanStep::OutputRemove { .. }
             | PlanStep::UserShellUpdate { .. }
             | PlanStep::SystemGroupCreate(_)
             | PlanStep::SystemGroupRemove(_)

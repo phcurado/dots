@@ -11,6 +11,7 @@ mod plan;
 mod platform;
 mod project;
 mod service;
+mod ssh;
 mod state;
 mod symlink;
 mod systemd;
@@ -133,6 +134,9 @@ fn main() -> Result<()> {
             print_plan(&project, &plan, false);
             confirm_apply(&plan, auto_approve)?;
             apply_plan_and_save(&plan, &state_path, &mut state)?;
+            let config = load_config(&project, &profile)?;
+            managed_output::sync_outputs(&config.outputs, &mut state)?;
+            save_state(&state_path, &state)?;
         }
         Command::Symlink { path, command } => {
             let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
@@ -171,7 +175,6 @@ fn check_project(
     with_spinner("Checking system...", || {
         let config = load_config(project, profile)?;
         refresh_state_from_system(&config, state)?;
-        managed_output::sync_outputs(&config.outputs, state)?;
         save_state(state_path, state)?;
         build_plan(&config, state)
     })

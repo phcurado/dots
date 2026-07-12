@@ -20,6 +20,7 @@ export default defineConfig({
         items: [
           { text: "Symlinks", link: "/symlinks" },
           { text: "Files", link: "/files" },
+          { text: "SSH", link: "/ssh" },
           { text: "Packages", link: "/packages" },
           { text: "Services", link: "/services" },
           { text: "Docker Compose", link: "/docker-compose" },

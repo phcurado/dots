@@ -98,17 +98,49 @@ pub(crate) fn apply_file(resource: &FileResource, state: &mut State) -> Result<(
 
     let contents = fs::read(&resource.source)
         .with_context(|| format!("failed to read {}", resource.source.display()))?;
-    if let Some(parent) = resource.target.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-
     let existing_mode = fs::symlink_metadata(&resource.target)
         .ok()
         .filter(|metadata| metadata.is_file())
         .map(|metadata| metadata.mode() & 0o7777);
-    let mode = resource.mode.or(existing_mode);
-    let temporary = temporary_path(&resource.target)?;
+    write_file_atomically(&resource.target, &contents, resource.mode.or(existing_mode))?;
+
+    state
+        .resources
+        .insert(file_id_for(resource), state_file(resource)?);
+    Ok(())
+}
+
+pub(crate) fn apply_file_mode(resource: &FileResource, state: &mut State) -> Result<()> {
+    let mode = resource.mode.expect("mode update requires a declared mode");
+    ensure_mode(&resource.target, mode)?;
+    state
+        .resources
+        .insert(file_id_for(resource), state_file(resource)?);
+    Ok(())
+}
+
+pub(crate) fn digest_file(path: &Path) -> Result<String> {
+    let contents = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let digest = Sha256::digest(contents);
+    Ok(format!("sha256:{digest:x}"))
+}
+
+pub(crate) fn ensure_mode(path: &Path, mode: u32) -> Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .with_context(|| format!("failed to set mode on {}", path.display()))?;
+    Ok(())
+}
+
+pub(crate) fn write_file_atomically(
+    target: &Path,
+    contents: &[u8],
+    mode: Option<u32>,
+) -> Result<()> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let temporary = temporary_path(target)?;
     let result = (|| -> Result<()> {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -119,15 +151,15 @@ pub(crate) fn apply_file(resource: &FileResource, state: &mut State) -> Result<(
             .open(&temporary)
             .with_context(|| format!("failed to create {}", temporary.display()))?;
         if let Some(mode) = mode {
-            fs::set_permissions(&temporary, fs::Permissions::from_mode(mode))?;
+            ensure_mode(&temporary, mode)?;
         }
-        file.write_all(&contents)?;
+        file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&temporary, &resource.target).with_context(|| {
+        fs::rename(&temporary, target).with_context(|| {
             format!(
                 "failed to replace {} with {}",
-                resource.target.display(),
+                target.display(),
                 temporary.display()
             )
         })?;
@@ -136,27 +168,7 @@ pub(crate) fn apply_file(resource: &FileResource, state: &mut State) -> Result<(
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    result?;
-
-    state
-        .resources
-        .insert(file_id_for(resource), state_file(resource)?);
-    Ok(())
-}
-
-pub(crate) fn apply_file_mode(resource: &FileResource, state: &mut State) -> Result<()> {
-    let mode = resource.mode.expect("mode update requires a declared mode");
-    fs::set_permissions(&resource.target, fs::Permissions::from_mode(mode))?;
-    state
-        .resources
-        .insert(file_id_for(resource), state_file(resource)?);
-    Ok(())
-}
-
-fn digest_file(path: &Path) -> Result<String> {
-    let contents = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let digest = Sha256::digest(contents);
-    Ok(format!("sha256:{digest:x}"))
+    result
 }
 
 fn temporary_path(target: &Path) -> Result<PathBuf> {

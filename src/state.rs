@@ -40,6 +40,17 @@ pub(crate) enum StateResource {
         source_digest: String,
         mode: Option<u32>,
     },
+    #[serde(rename = "ssh-keypair")]
+    SshKeypair {
+        name: String,
+        private_path: PathBuf,
+        public_path: PathBuf,
+        private_digest: String,
+        public_digest: String,
+        fingerprint: String,
+        public_key: String,
+        encrypted: bool,
+    },
     #[serde(rename = "group")]
     Group { name: String },
     #[serde(rename = "user-group")]
@@ -62,6 +73,7 @@ impl StateResource {
         "compose:",
         "font:",
         "file:",
+        "ssh-keypair:",
         "group:",
         "user-group:",
     ];

@@ -12,6 +12,7 @@ use crate::docker::{
 };
 use crate::font::{FontResource, font_matches, state_font};
 use crate::managed_file::{FileResource, FileStatus, file_id_for, inspect_file, state_file};
+use crate::managed_output::{OutputValue, resolve_outputs};
 use crate::package::{
     PackageProvider, PackageResource, PackageStatusCache, package_installed_cached,
     package_provider_available, package_provides,
@@ -19,6 +20,10 @@ use crate::package::{
 use crate::service::{
     ServiceProvider, ServiceResource, ServiceStatusCache, service_current_cached,
     service_provider_available,
+};
+use crate::ssh::{
+    KeypairObservation, KeypairStatus, SshKeypairResource, inspect_keypair, keypair_id_for,
+    state_keypair,
 };
 use crate::state::{State, StateResource};
 use crate::symlink::{
@@ -130,6 +135,36 @@ pub(crate) enum PlanStep {
     FileConflict {
         resource: FileResource,
         reason: String,
+    },
+    SshKeypairCreate(SshKeypairResource),
+    SshKeypairAdopt(SshKeypairResource),
+    SshKeypairPermissionUpdate {
+        resource: SshKeypairResource,
+        observation: KeypairObservation,
+    },
+    SshKeypairNoop {
+        resource: SshKeypairResource,
+        observation: KeypairObservation,
+    },
+    SshKeypairForget {
+        name: String,
+    },
+    SshKeypairConflict {
+        resource: SshKeypairResource,
+        reason: String,
+    },
+    OutputCreate {
+        name: String,
+        value: Option<serde_json::Value>,
+    },
+    OutputUpdate {
+        name: String,
+        before: serde_json::Value,
+        after: Option<serde_json::Value>,
+    },
+    OutputRemove {
+        name: String,
+        value: serde_json::Value,
     },
     UserShellUpdate {
         resource: UserShellResource,
@@ -251,6 +286,18 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
             state
                 .resources
                 .insert(file_id_for(resource), state_file(resource)?);
+        }
+    }
+
+    for resource in &config.ssh_keypairs {
+        match inspect_keypair(resource, state)? {
+            KeypairStatus::Current(observation) | KeypairStatus::PermissionDrift(observation) => {
+                state.resources.insert(
+                    keypair_id_for(resource),
+                    state_keypair(resource, &observation),
+                );
+            }
+            _ => {}
         }
     }
 
@@ -447,6 +494,31 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    for resource in &config.ssh_keypairs {
+        let id = keypair_id_for(resource);
+        declared.insert(id);
+        match inspect_keypair(resource, state)? {
+            KeypairStatus::Missing => plan.push(PlanStep::SshKeypairCreate(resource.clone())),
+            KeypairStatus::Current(observation) => plan.push(PlanStep::SshKeypairNoop {
+                resource: resource.clone(),
+                observation,
+            }),
+            KeypairStatus::PermissionDrift(observation) => {
+                plan.push(PlanStep::SshKeypairPermissionUpdate {
+                    resource: resource.clone(),
+                    observation,
+                })
+            }
+            KeypairStatus::ValidationRequired => {
+                plan.push(PlanStep::SshKeypairAdopt(resource.clone()))
+            }
+            KeypairStatus::Conflict(reason) => plan.push(PlanStep::SshKeypairConflict {
+                resource: resource.clone(),
+                reason,
+            }),
+        }
+    }
+
     for resource in &config.files {
         let id = file_id_for(resource);
         declared.insert(id.clone());
@@ -609,6 +681,52 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    let resolved_outputs = resolve_outputs(&config.outputs, state)?;
+    let declared_outputs = config
+        .outputs
+        .iter()
+        .map(|output| output.name.clone())
+        .collect::<BTreeSet<_>>();
+    for output in &config.outputs {
+        let pending = match &output.value {
+            OutputValue::ResourceAttribute(reference) => plan.iter().any(|step| match step {
+                PlanStep::SshKeypairCreate(resource) | PlanStep::SshKeypairAdopt(resource) => {
+                    keypair_id_for(resource) == reference.resource_id
+                }
+                _ => false,
+            }),
+            OutputValue::Literal(_) => false,
+        };
+        let resolved = (!pending)
+            .then(|| resolved_outputs.get(&output.name))
+            .flatten();
+        match (state.outputs.get(&output.name), resolved) {
+            (None, value) => plan.push(PlanStep::OutputCreate {
+                name: output.name.clone(),
+                value: value.cloned(),
+            }),
+            (Some(before), Some(after)) if before != after => plan.push(PlanStep::OutputUpdate {
+                name: output.name.clone(),
+                before: before.clone(),
+                after: Some(after.clone()),
+            }),
+            (Some(before), None) => plan.push(PlanStep::OutputUpdate {
+                name: output.name.clone(),
+                before: before.clone(),
+                after: None,
+            }),
+            _ => {}
+        }
+    }
+    for (name, value) in &state.outputs {
+        if !declared_outputs.contains(name) {
+            plan.push(PlanStep::OutputRemove {
+                name: name.clone(),
+                value: value.clone(),
+            });
+        }
+    }
+
     for (id, resource) in &state.resources {
         if declared.contains(id) {
             continue;
@@ -630,6 +748,9 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             StateResource::File { target, .. } => plan.push(PlanStep::FileForget {
                 target: target.clone(),
             }),
+            StateResource::SshKeypair { name, .. } => {
+                plan.push(PlanStep::SshKeypairForget { name: name.clone() })
+            }
             StateResource::Package { provider, name } => {
                 let resource = PackageResource {
                     provider: provider.clone(),

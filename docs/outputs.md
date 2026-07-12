@@ -35,4 +35,4 @@ Read one value:
 dots output machine_name
 ```
 
-outputs are stored into `dots` state after running `dots check` or `dots apply`.
+Output changes are shown by `dots check` and stored after `dots apply`.

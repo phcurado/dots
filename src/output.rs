@@ -23,11 +23,17 @@ pub(crate) struct PlanSummary {
     pub(crate) conflicts: usize,
     pub(crate) symlink_candidates: usize,
     pub(crate) forget: usize,
+    pub(crate) output_changes: usize,
 }
 
 impl PlanSummary {
     pub(crate) fn total_changes(&self) -> usize {
-        self.create + self.update + self.remove + self.symlink_candidates + self.forget
+        self.create
+            + self.update
+            + self.remove
+            + self.symlink_candidates
+            + self.forget
+            + self.output_changes
     }
 }
 
@@ -40,6 +46,12 @@ pub(crate) fn display_target(path: &Path) -> String {
         return format!("~/{}", rest.display());
     }
     path.display().to_string()
+}
+
+fn display_output_value(value: Option<&serde_json::Value>) -> String {
+    value
+        .map(|value| serde_json::to_string(value).expect("JSON output value"))
+        .unwrap_or_else(|| "known after apply".to_string())
 }
 
 pub(crate) fn display_source(project: &Project, path: &Path) -> String {
@@ -107,6 +119,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::ComposeCreate(_)
             | PlanStep::FontCreate(_)
             | PlanStep::FileCreate(_)
+            | PlanStep::SshKeypairCreate(_)
             | PlanStep::SystemGroupCreate(_)
             | PlanStep::UserGroupAdd(_)
             | PlanStep::CommandCreate(_) => summary.create += 1,
@@ -116,6 +129,8 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::FontUpdate(_)
             | PlanStep::FileUpdate(_)
             | PlanStep::FileModeUpdate(_)
+            | PlanStep::SshKeypairAdopt(_)
+            | PlanStep::SshKeypairPermissionUpdate { .. }
             | PlanStep::UserShellUpdate { .. } => summary.update += 1,
             PlanStep::SymlinkRemove { .. }
             | PlanStep::PackageRemove { .. }
@@ -132,11 +147,15 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::ComposeConflict { .. }
             | PlanStep::FontConflict { .. }
             | PlanStep::FileConflict { .. }
+            | PlanStep::SshKeypairConflict { .. }
             | PlanStep::SystemGroupConflict { .. }
             | PlanStep::UserGroupConflict { .. }
             | PlanStep::CapabilityConflict { .. } => summary.conflicts += 1,
             PlanStep::SymlinkCandidate(_) => summary.symlink_candidates += 1,
-            PlanStep::FileForget { .. } => summary.forget += 1,
+            PlanStep::FileForget { .. } | PlanStep::SshKeypairForget { .. } => summary.forget += 1,
+            PlanStep::OutputCreate { .. }
+            | PlanStep::OutputUpdate { .. }
+            | PlanStep::OutputRemove { .. } => summary.output_changes += 1,
             PlanStep::SymlinkNoop(_)
             | PlanStep::PackageNoop { .. }
             | PlanStep::ServiceNoop(_)
@@ -144,6 +163,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             | PlanStep::ComposeNoop { .. }
             | PlanStep::FontNoop(_)
             | PlanStep::FileNoop(_)
+            | PlanStep::SshKeypairNoop { .. }
             | PlanStep::UserShellNoop
             | PlanStep::SystemGroupNoop(_)
             | PlanStep::UserGroupNoop(_)
@@ -290,6 +310,55 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
+    let has_ssh_keypairs = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::SshKeypairCreate(_)
+                | PlanStep::SshKeypairAdopt(_)
+                | PlanStep::SshKeypairPermissionUpdate { .. }
+                | PlanStep::SshKeypairForget { .. }
+                | PlanStep::SshKeypairConflict { .. }
+        )
+    });
+    if has_ssh_keypairs {
+        if has_capabilities || has_symlinks || has_packages || has_fonts {
+            println!();
+        }
+        println!("{}", bold("SSH keypairs:"));
+        for step in plan {
+            match step {
+                PlanStep::SshKeypairCreate(resource) => println!(
+                    "  {} {} {}",
+                    green("+"),
+                    resource.name,
+                    display_target(&resource.private_path)
+                ),
+                PlanStep::SshKeypairAdopt(resource) => println!(
+                    "  {} {} {} (passphrase validation required)",
+                    yellow("~"),
+                    resource.name,
+                    display_target(&resource.private_path)
+                ),
+                PlanStep::SshKeypairPermissionUpdate { resource, .. } => println!(
+                    "  {} {} {} (permissions)",
+                    yellow("~"),
+                    resource.name,
+                    display_target(&resource.private_path)
+                ),
+                PlanStep::SshKeypairForget { name } => {
+                    println!("  {} forget {name}", yellow("~"))
+                }
+                PlanStep::SshKeypairConflict { resource, reason } => println!(
+                    "  {} {} {} ({reason})",
+                    red("!"),
+                    resource.name,
+                    display_target(&resource.private_path)
+                ),
+                _ => {}
+            }
+        }
+    }
+
     let has_files = plan.iter().any(|step| {
         matches!(
             step,
@@ -301,7 +370,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         )
     });
     if has_files {
-        if has_capabilities || has_symlinks || has_packages || has_fonts {
+        if has_capabilities || has_symlinks || has_packages || has_fonts || has_ssh_keypairs {
             println!();
         }
         println!("{}", bold("Files:"));
@@ -330,7 +399,13 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         .iter()
         .any(|step| matches!(step, PlanStep::CommandCreate(_)));
     if has_commands {
-        if has_capabilities || has_symlinks || has_packages || has_fonts || has_files {
+        if has_capabilities
+            || has_symlinks
+            || has_packages
+            || has_fonts
+            || has_ssh_keypairs
+            || has_files
+        {
             println!();
         }
         println!("{}", bold("Commands:"));
@@ -355,6 +430,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_ssh_keypairs
             || has_files
             || has_commands
         {
@@ -394,6 +470,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_ssh_keypairs
             || has_files
             || has_commands
             || has_systemd_units
@@ -433,6 +510,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_ssh_keypairs
             || has_files
             || has_commands
             || has_compose
@@ -481,6 +559,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_ssh_keypairs
             || has_files
             || has_commands
             || has_services
@@ -518,6 +597,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             || has_symlinks
             || has_packages
             || has_fonts
+            || has_ssh_keypairs
             || has_files
             || has_commands
             || has_services
@@ -551,6 +631,44 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
         }
     }
 
+    let has_outputs = plan.iter().any(|step| {
+        matches!(
+            step,
+            PlanStep::OutputCreate { .. }
+                | PlanStep::OutputUpdate { .. }
+                | PlanStep::OutputRemove { .. }
+        )
+    });
+    if has_outputs {
+        println!();
+        println!("{}", bold("Outputs:"));
+        for step in plan {
+            match step {
+                PlanStep::OutputCreate { name, value } => println!(
+                    "  {} {name} = {}",
+                    green("+"),
+                    display_output_value(value.as_ref())
+                ),
+                PlanStep::OutputUpdate {
+                    name,
+                    before,
+                    after,
+                } => println!(
+                    "  {} {name}: {} → {}",
+                    yellow("~"),
+                    serde_json::to_string(before).expect("JSON output value"),
+                    display_output_value(after.as_ref())
+                ),
+                PlanStep::OutputRemove { name, value } => println!(
+                    "  {} {name} = {}",
+                    red("-"),
+                    serde_json::to_string(value).expect("JSON output value")
+                ),
+                _ => {}
+            }
+        }
+    }
+
     println!();
     let import_text = if summary.symlink_candidates > 0 {
         format!(
@@ -565,8 +683,21 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
     } else {
         String::new()
     };
+    let output_text = if summary.output_changes > 0 {
+        format!(
+            "{} {}, ",
+            yellow(&summary.output_changes.to_string()),
+            if summary.output_changes == 1 {
+                "output change"
+            } else {
+                "output changes"
+            }
+        )
+    } else {
+        String::new()
+    };
     println!(
-        "{} {import_text}{forget_text}{} to create, {} to update, {} to destroy{}",
+        "{} {import_text}{forget_text}{output_text}{} to create, {} to update, {} to destroy{}",
         bold("Check:"),
         green(&summary.create.to_string()),
         yellow(&summary.update.to_string()),
@@ -613,6 +744,9 @@ pub(crate) fn print_state(project: &Project, state: &State) {
             }
             StateResource::Font { target, .. } => println!("  font {}", display_target(target)),
             StateResource::File { target, .. } => println!("  file {}", display_target(target)),
+            StateResource::SshKeypair {
+                name, private_path, ..
+            } => println!("  SSH keypair {name} {}", display_target(private_path)),
             StateResource::Group { name } => println!("  group {name}"),
             StateResource::UserGroup { name } => println!("  user group {name}"),
         }
