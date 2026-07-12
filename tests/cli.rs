@@ -518,3 +518,42 @@ fn apply_requires_yes() {
     assert!(stdout.contains("Type 'yes' to apply these changes."));
     assert!(stderr.contains("apply cancelled"));
 }
+
+#[test]
+fn outputs_are_stored_and_read_as_typed_values() {
+    let root = temp_dir("cli-outputs");
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        dots.output("machine_name", { value = "workstation" })
+        dots.output("ports", { value = { 80, 443 } })
+        dots.output("settings", { value = { enabled = true, retries = 3 } })
+        "#,
+    )
+    .unwrap();
+
+    let check = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(check.status.success());
+
+    let single = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["output", "machine_name"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(single.status.success());
+    assert_eq!(String::from_utf8(single.stdout).unwrap(), "workstation\n");
+
+    let list = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("output")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(list.status.success());
+    let stdout = String::from_utf8(list.stdout).unwrap();
+    assert!(stdout.contains("ports = [80,443]"));
+    assert!(stdout.contains("settings = {\"enabled\":true,\"retries\":3}"));
+}

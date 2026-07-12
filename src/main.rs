@@ -3,6 +3,7 @@ mod command;
 mod config;
 mod docker;
 mod font;
+mod managed_output;
 mod output;
 mod package;
 mod plan;
@@ -68,6 +69,11 @@ enum Command {
         path: Option<String>,
         #[command(subcommand)]
         command: Option<SymlinkCommand>,
+    },
+    /// Read values published by the configuration.
+    Output {
+        /// Output name. Lists all outputs when omitted.
+        name: Option<String>,
     },
     /// Inspect or edit local state.
     State {
@@ -139,6 +145,9 @@ fn main() -> Result<()> {
                 command,
             )?;
         }
+        Command::Output { name } => {
+            run_output_command(&state, name.as_deref())?;
+        }
         Command::State { command } => {
             run_state_command(&project, &state_path, &mut state, command)?;
         }
@@ -161,6 +170,7 @@ fn check_project(
     with_spinner("Checking system...", || {
         let config = load_config(project, profile)?;
         refresh_state_from_system(&config, state)?;
+        managed_output::sync_outputs(&config.outputs, state)?;
         save_state(state_path, state)?;
         build_plan(&config, state)
     })
@@ -522,6 +532,30 @@ fn confirm_symlink_apply(count: usize, auto_approve: bool) -> Result<()> {
     io::stdin().read_line(&mut answer)?;
     if answer.trim() != "yes" {
         bail!("symlink cancelled");
+    }
+    Ok(())
+}
+
+fn run_output_command(state: &State, name: Option<&str>) -> Result<()> {
+    if let Some(name) = name {
+        let output = state
+            .outputs
+            .get(name)
+            .with_context(|| format!("output is not available: {name}"))?;
+        match output {
+            serde_json::Value::String(value) => println!("{value}"),
+            value => println!("{}", serde_json::to_string(value)?),
+        }
+        return Ok(());
+    }
+
+    if state.outputs.is_empty() {
+        println!("No outputs.");
+        return Ok(());
+    }
+    println!("{}", bold("Outputs:"));
+    for (name, value) in &state.outputs {
+        println!("  {name} = {}", serde_json::to_string(value)?);
     }
     Ok(())
 }

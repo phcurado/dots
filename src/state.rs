@@ -42,6 +42,8 @@ pub(crate) enum StateResource {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct State {
     pub(crate) resources: BTreeMap<String, StateResource>,
+    #[serde(default)]
+    pub(crate) outputs: BTreeMap<String, serde_json::Value>,
 }
 
 impl StateResource {

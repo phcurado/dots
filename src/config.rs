@@ -8,6 +8,7 @@ use mlua::{Lua, Table, Value};
 use crate::command::CommandResource;
 use crate::docker::ComposeResource;
 use crate::font::{FontResource, expand_font_source};
+use crate::managed_output::{OutputDeclaration, output_value_from_lua};
 use crate::package::{
     PackageList, PackageListFormat, PackageMatcher, PackageProvider, PackageResource,
 };
@@ -32,6 +33,7 @@ pub(crate) struct Config {
     pub(crate) compose: Vec<ComposeResource>,
     pub(crate) fonts: Vec<FontResource>,
     pub(crate) commands: Vec<CommandResource>,
+    pub(crate) outputs: Vec<OutputDeclaration>,
     pub(crate) package_providers: BTreeMap<String, PackageProvider>,
     pub(crate) service_providers: BTreeMap<String, ServiceProvider>,
     pub(crate) user: UserConfig,
@@ -48,6 +50,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     let compose_resources = lua.create_table()?;
     let font_sources = lua.create_table()?;
     let commands = lua.create_table()?;
+    let output_declarations = lua.create_table()?;
     let system_groups = lua.create_table()?;
     let user_groups = lua.create_table()?;
     let user_shell = lua.create_table()?;
@@ -117,6 +120,26 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
         Ok(reference)
     })?;
 
+    let collected_outputs = output_declarations.clone();
+    let output = lua.create_function(move |lua, (name, spec): (String, Table)| {
+        if name.is_empty() {
+            return Err(mlua::Error::RuntimeError(
+                "output name must not be empty".to_string(),
+            ));
+        }
+        let value = spec.get::<Value>("value")?;
+        if matches!(value, Value::Nil) {
+            return Err(mlua::Error::RuntimeError(
+                "output value is required".to_string(),
+            ));
+        }
+        let item = lua.create_table()?;
+        item.set("name", name)?;
+        item.set("value", value)?;
+        collected_outputs.raw_push(item)?;
+        Ok(())
+    })?;
+
     let group = lua.create_table()?;
     let collected_system_groups = system_groups.clone();
     let create_group = lua.create_function(move |lua, group_list: Table| {
@@ -175,6 +198,7 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
     dots.set("docker", docker)?;
     dots.set("fonts", fonts)?;
     dots.set("command", command)?;
+    dots.set("output", output)?;
     dots.set("group", group)?;
     dots.set("user", user)?;
     dots.set("profile", profile)?;
@@ -281,6 +305,18 @@ pub(crate) fn load_config(project: &Project, profile: &str) -> Result<Config> {
             apply: item.get::<String>("apply")?,
             needs: table_references(item.get::<Option<Table>>("needs")?)?,
             provides: table_references(item.get::<Option<Table>>("provides")?)?,
+        });
+    }
+    let mut output_names = BTreeSet::new();
+    for item in output_declarations.sequence_values::<Table>() {
+        let item = item?;
+        let name = item.get::<String>("name")?;
+        if !output_names.insert(name.clone()) {
+            bail!("duplicate output: {name}");
+        }
+        config.outputs.push(OutputDeclaration {
+            name,
+            value: output_value_from_lua(item.get::<Value>("value")?)?,
         });
     }
     if let Some(shell) = user_shell.get::<Option<String>>("name")? {

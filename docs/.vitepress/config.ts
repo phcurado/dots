@@ -23,6 +23,7 @@ export default defineConfig({
           { text: "Services", link: "/services" },
           { text: "Docker Compose", link: "/docker-compose" },
           { text: "Commands", link: "/commands" },
+          { text: "Outputs", link: "/outputs" },
           { text: "Fonts", link: "/fonts" },
           { text: "User", link: "/user" },
         ],
