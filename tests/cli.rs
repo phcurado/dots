@@ -254,7 +254,7 @@ case " $* " in
     fi
     ;;
   *" up "*) touch "$FAKE_DOCKER_STATE" ;;
-  *" down "*) rm -f "$FAKE_DOCKER_STATE" ;;
+  *" down "*) cat >/dev/null; rm -f "$FAKE_DOCKER_STATE" ;;
   *) exit 1 ;;
 esac
 "#,
