@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## 0.8.0
+
+`0.8.0` adds managed files, outputs and SSH keypairs.
+
+### Added
+
+- `dots.file(...)` for atomically managing regular files and Unix modes from project sources.
+- `dots.output(...)` and `dots output` for publishing typed literal and resource values.
+- Output changes in `dots check`, including values that become known after apply.
+- `dots.ssh.keypair(...)` for generating or adopting ED25519 keypairs with explicit passphrase policies.
+- Public-key and fingerprint attributes from SSH keypairs for use as outputs.
+
+### Changed
+
+- Removing a file or SSH keypair declaration forgets it from state without deleting the files.
+- SSH keypairs enforce `0700` on the parent directory, `0600` on the private key, and `0644` on the public key.
+
 ## 0.7.1
 
 ### Fixed
