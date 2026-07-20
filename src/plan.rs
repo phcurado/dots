@@ -727,6 +727,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
         }
     }
 
+    let mut deferred_brew_tap_removals = Vec::new();
     for (id, resource) in &state.resources {
         if declared.contains(id) {
             continue;
@@ -757,10 +758,17 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                     name: name.clone(),
                 };
                 match config.package_providers.get(provider) {
-                    Some(provider) => plan.push(PlanStep::PackageRemove {
-                        resource,
-                        provider: provider.clone(),
-                    }),
+                    Some(package_provider) => {
+                        let step = PlanStep::PackageRemove {
+                            resource,
+                            provider: package_provider.clone(),
+                        };
+                        if provider == "brew-tap" {
+                            deferred_brew_tap_removals.push(step);
+                        } else {
+                            plan.push(step);
+                        }
+                    }
                     None => plan.push(PlanStep::PackageConflict {
                         resource,
                         reason: format!("{provider} provider is not configured"),
@@ -827,6 +835,7 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
             }
         }
     }
+    plan.extend(deferred_brew_tap_removals);
 
     Ok(plan)
 }
@@ -977,6 +986,42 @@ mod tests {
 
         assert!(state.resources.contains_key("package:fake:bat"));
         assert!(matches!(plan.as_slice(), [PlanStep::PackageNoop { .. }]));
+    }
+
+    #[test]
+    fn brew_taps_are_removed_after_formulae() {
+        let mut config = Config::default();
+        config
+            .package_providers
+            .insert("brew".to_string(), fake_provider("exit 0", "exit 0"));
+        config
+            .package_providers
+            .insert("brew-tap".to_string(), fake_provider("exit 0", "exit 0"));
+        let mut state = State::default();
+        state.resources.insert(
+            "package:brew-tap:example/tools".to_string(),
+            StateResource::Package {
+                provider: "brew-tap".to_string(),
+                name: "example/tools".to_string(),
+            },
+        );
+        state.resources.insert(
+            "package:brew:widget".to_string(),
+            StateResource::Package {
+                provider: "brew".to_string(),
+                name: "widget".to_string(),
+            },
+        );
+
+        let plan = build_plan(&config, &state).unwrap();
+
+        assert!(matches!(
+            plan.as_slice(),
+            [
+                PlanStep::PackageRemove { resource: formula, .. },
+                PlanStep::PackageRemove { resource: tap, .. }
+            ] if formula.provider == "brew" && tap.provider == "brew-tap"
+        ));
     }
 
     #[test]

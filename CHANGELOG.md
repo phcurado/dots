@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.8.2
+
+### Fixed
+
+- Homebrew formulae and casks are removed before their taps, preventing `brew
+  untap` from failing while managed packages are still installed.
+
 ## 0.8.1
 
 ### Added
