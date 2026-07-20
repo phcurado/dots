@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.8.1
+
+### Added
+
+- Declarative Homebrew trust for individual formulae with
+  `dots.brew.trust.formula(...)` and whole taps with `dots.brew.trust.tap(...)`.
+
 ## 0.8.0
 
 `0.8.0` adds managed files, outputs and SSH keypairs.

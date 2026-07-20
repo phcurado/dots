@@ -1115,18 +1115,21 @@ mod tests {
     fn package_order_is_preserved() {
         let project = temp_project(
             r#"
-            dots.brew.tap({ "FelixKratz/formulae" })
-            dots.brew.install({ "sketchybar" })
+            dots.brew.tap({ "example/tools" })
+            dots.brew.trust.tap({ "example/tools" })
+            dots.brew.install({ "example/tools/widget" })
             "#,
         );
 
         let config = load_config(&project, "test").unwrap();
 
-        assert_eq!(config.packages.len(), 2);
+        assert_eq!(config.packages.len(), 3);
         assert_eq!(config.packages[0].provider, "brew-tap");
-        assert_eq!(config.packages[0].name, "FelixKratz/formulae");
-        assert_eq!(config.packages[1].provider, "brew");
-        assert_eq!(config.packages[1].name, "sketchybar");
+        assert_eq!(config.packages[0].name, "example/tools");
+        assert_eq!(config.packages[1].provider, "brew-trusted-tap");
+        assert_eq!(config.packages[1].name, "example/tools");
+        assert_eq!(config.packages[2].provider, "brew");
+        assert_eq!(config.packages[2].name, "example/tools/widget");
     }
 
     #[test]
@@ -1156,6 +1159,22 @@ mod tests {
         assert_eq!(config.packages.len(), 1);
         assert_eq!(config.packages[0].provider, "brew-cask");
         assert_eq!(config.packages[0].name, "ghostty");
+    }
+
+    #[test]
+    fn loads_brew_formula_trust() {
+        let project = temp_project(r#"dots.brew.trust.formula({ "example/tools/widget" })"#);
+
+        let config = load_config(&project, "test").unwrap();
+
+        assert!(
+            config
+                .package_providers
+                .contains_key("brew-trusted-formula")
+        );
+        assert_eq!(config.packages.len(), 1);
+        assert_eq!(config.packages[0].provider, "brew-trusted-formula");
+        assert_eq!(config.packages[0].name, "example/tools/widget");
     }
 
     #[test]

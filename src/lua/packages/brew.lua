@@ -38,6 +38,35 @@ dots.provider.package("brew-tap", {
 
 dots.brew.tap = dots["brew-tap"].install
 
+dots.provider.package("brew-trusted-formula", {
+	capability = "provider:brew",
+	available = "command -v brew >/dev/null",
+	installed = 'brew trust --json=v1 | grep -F "\\\"$DOTS_PACKAGE\\\"" >/dev/null',
+	install = 'brew trust --formula "$DOTS_PACKAGE"',
+	remove = 'brew untrust --formula "$DOTS_PACKAGE"',
+	list = {
+		command = "brew trust --json=v1",
+		format = "brew-trusted-formulae",
+	},
+})
+
+dots.provider.package("brew-trusted-tap", {
+	capability = "provider:brew",
+	available = "command -v brew >/dev/null",
+	installed = 'brew trust --json=v1 | grep -F "\\\"$DOTS_PACKAGE\\\"" >/dev/null',
+	install = 'brew trust --tap "$DOTS_PACKAGE"',
+	remove = 'brew untrust --tap "$DOTS_PACKAGE"',
+	list = {
+		command = "brew trust --json=v1",
+		format = "brew-trusted-taps",
+	},
+})
+
+dots.brew.trust = {
+	formula = dots["brew-trusted-formula"].install,
+	tap = dots["brew-trusted-tap"].install,
+}
+
 dots.brew.enable = function()
 	dots.command("homebrew", {
 		check = "command -v brew >/dev/null",

@@ -41,6 +41,8 @@ pub(crate) enum PackageListFormat {
     Lines,
     BrewFormulae,
     BrewCasks,
+    BrewTrustedFormulae,
+    BrewTrustedTaps,
 }
 
 impl PackageListFormat {
@@ -49,6 +51,8 @@ impl PackageListFormat {
             Self::Lines => "lines",
             Self::BrewFormulae => "brew-formulae",
             Self::BrewCasks => "brew-casks",
+            Self::BrewTrustedFormulae => "brew-trusted-formulae",
+            Self::BrewTrustedTaps => "brew-trusted-taps",
         }
     }
 
@@ -57,6 +61,8 @@ impl PackageListFormat {
             "lines" => Some(Self::Lines),
             "brew-formulae" => Some(Self::BrewFormulae),
             "brew-casks" => Some(Self::BrewCasks),
+            "brew-trusted-formulae" => Some(Self::BrewTrustedFormulae),
+            "brew-trusted-taps" => Some(Self::BrewTrustedTaps),
             _ => None,
         }
     }
@@ -174,7 +180,24 @@ fn list_installed_packages(
         PackageListFormat::BrewCasks => command_output_set_cached(cache, &list.command, |source| {
             parse_brew_info_json(source).map(|(_, casks)| casks)
         }),
+        PackageListFormat::BrewTrustedFormulae => {
+            command_output_set_cached(cache, &list.command, |source| {
+                parse_json_string_array(source, "formulae")
+            })
+        }
+        PackageListFormat::BrewTrustedTaps => {
+            command_output_set_cached(cache, &list.command, |source| {
+                parse_json_string_array(source, "taps")
+            })
+        }
     }
+}
+
+fn parse_json_string_array(source: &[u8], key: &str) -> Result<BTreeSet<String>> {
+    let value: serde_json::Value = serde_json::from_slice(source)?;
+    let mut values = BTreeSet::new();
+    insert_json_string_array(&mut values, value.get(key));
+    Ok(values)
 }
 
 fn parse_brew_info_json(source: &[u8]) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
@@ -324,6 +347,24 @@ mod tests {
         assert!(formulae.contains("7zip"));
         assert!(casks.contains("aerospace"));
         assert!(casks.contains("nikitabobko/tap/aerospace"));
+    }
+
+    #[test]
+    fn brew_trust_parser_includes_requested_entries() {
+        let source = br#"
+        {
+          "taps": ["example/tools"],
+          "formulae": ["example/tools/widget"],
+          "casks": [],
+          "commands": []
+        }
+        "#;
+
+        let taps = parse_json_string_array(source, "taps").unwrap();
+        let formulae = parse_json_string_array(source, "formulae").unwrap();
+
+        assert!(taps.contains("example/tools"));
+        assert!(formulae.contains("example/tools/widget"));
     }
 
     #[test]

@@ -19,6 +19,10 @@ dots.apt.install({ "bat", "ripgrep" })
 dots.brew.enable()
 dots.brew.install({ "bat", "ripgrep" })
 dots.brew.cask({ "firefox" })
+
+dots.brew.tap({ "example/tools" })
+dots.brew.trust.formula({ "example/tools/widget" })
+dots.brew.install({ "example/tools/widget" })
 ```
 
 The built-in providers are:
@@ -35,6 +39,19 @@ The built-in providers are:
 - `brew`
 - `brew-cask`, exposed as `dots.brew.cask(...)`
 - `brew-tap`, exposed as `dots.brew.tap(...)`
+- `brew-trusted-formula`, exposed as `dots.brew.trust.formula(...)`
+- `brew-trusted-tap`, exposed as `dots.brew.trust.tap(...)`
+
+Declare trust before installing from an untrusted tap. Prefer trusting only the
+formula you need. To trust every current and future formula, cask, and command
+from a tap instead:
+
+```lua
+dots.brew.tap({ "example/tools" })
+dots.brew.trust.tap({ "example/tools" })
+```
+
+Removing a trust declaration runs the corresponding `brew untrust` command.
 
 `dots.brew.enable()` handles Homebrew when it is missing. `dots.yay.enable({
 method = "aur" })` builds `yay` from the AUR, so later `dots.yay.install`
