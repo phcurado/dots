@@ -8,9 +8,9 @@
 
 Do not commit this file. It belongs to one machine.
 
-State is what lets `dots` remove things safely. When `dots check` or
-`dots apply` sees that a declared resource already matches the machine, it
-records that resource. If the declaration is later removed from `dots.lua`,
+State is what lets `dots` remove things safely. When `dots apply` sees that a
+declared resource already matches the machine, it records that resource. If the
+declaration is later removed from `dots.lua`,
 `dots check` can show the matching remove without touching unrelated files.
 
 ## List managed entries

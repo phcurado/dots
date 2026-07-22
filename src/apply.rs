@@ -43,7 +43,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
         )
     }
 
-    let tracked = track_noop_resources(plan, state);
+    let tracked = track_noop_resources(plan, state)?;
 
     if summary.total_changes() == 0 {
         if tracked > 0 {
@@ -147,16 +147,16 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                     || apply_systemd_unit(resource, state),
                 )?
             }
-            PlanStep::SystemdUnitRemove(resource) => apply_with_status(
+            PlanStep::SystemdUnitRemove { resource, digest } => apply_with_status(
                 "Removing",
                 "Remove",
                 &format!("systemd.{}", resource.unit),
-                || remove_systemd_unit(resource, state),
+                || remove_systemd_unit(resource, digest.as_deref(), state),
             )?,
             PlanStep::SystemdUnitNoop(resource) => {
                 state
                     .resources
-                    .insert(systemd_unit_id_for(resource), state_systemd_unit(resource));
+                    .insert(systemd_unit_id_for(resource), state_systemd_unit(resource)?);
             }
             PlanStep::ComposeCreate(resource) | PlanStep::ComposeUpdate(resource) => {
                 apply_with_status(
@@ -190,10 +190,15 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
                 &format!("font.{}", display_target(&resource.target)),
                 || install_font(resource, state),
             )?,
-            PlanStep::FontRemove { source, target } => {
+            PlanStep::FontRemove {
+                source,
+                target,
+                digest,
+            } => {
                 let resource = crate::state::StateResource::Font {
                     source: source.clone(),
                     target: target.clone(),
+                    digest: digest.clone(),
                 };
                 apply_with_status(
                     "Removing",
@@ -205,7 +210,7 @@ pub(crate) fn apply_plan(plan: &[PlanStep], state: &mut State) -> Result<()> {
             PlanStep::FontNoop(resource) => {
                 state
                     .resources
-                    .insert(font_id_for(resource), state_font(resource));
+                    .insert(font_id_for(resource), state_font(resource)?);
             }
             PlanStep::FileCreate(resource) | PlanStep::FileUpdate(resource) => apply_with_status(
                 "Writing",
@@ -402,7 +407,7 @@ fn plan_uses_sudo(plan: &[PlanStep]) -> bool {
         PlanStep::PackageRemove { provider, .. } => shell_uses_sudo(&provider.remove),
         PlanStep::SystemdUnitCreate(_)
         | PlanStep::SystemdUnitUpdate(_)
-        | PlanStep::SystemdUnitRemove(_) => true,
+        | PlanStep::SystemdUnitRemove { .. } => true,
         PlanStep::ServiceCreate { provider, resource } => match resource.action {
             crate::service::ServiceAction::Start => {
                 provider.start.as_deref().is_some_and(shell_uses_sudo)
@@ -541,7 +546,7 @@ fn is_apply_step(step: &PlanStep) -> bool {
             | PlanStep::ServiceRemove { .. }
             | PlanStep::SystemdUnitCreate(_)
             | PlanStep::SystemdUnitUpdate(_)
-            | PlanStep::SystemdUnitRemove(_)
+            | PlanStep::SystemdUnitRemove { .. }
             | PlanStep::ComposeCreate(_)
             | PlanStep::ComposeUpdate(_)
             | PlanStep::ComposeRemove { .. }
@@ -581,8 +586,8 @@ fn step_id(step: &PlanStep) -> Option<String> {
         }
         PlanStep::SystemdUnitCreate(resource)
         | PlanStep::SystemdUnitUpdate(resource)
-        | PlanStep::SystemdUnitRemove(resource)
         | PlanStep::SystemdUnitNoop(resource) => Some(systemd_unit_id_for(resource)),
+        PlanStep::SystemdUnitRemove { resource, .. } => Some(systemd_unit_id_for(resource)),
         PlanStep::ComposeCreate(resource)
         | PlanStep::ComposeUpdate(resource)
         | PlanStep::ComposeRemove { resource, .. } => Some(compose_id_for(resource)),
@@ -635,7 +640,7 @@ fn step_needs(step: &PlanStep) -> Vec<String> {
             needs
         }
         PlanStep::ServiceRemove { provider, .. } => vec![provider.capability.clone()],
-        PlanStep::SystemdUnitRemove(resource) => vec![
+        PlanStep::SystemdUnitRemove { resource, .. } => vec![
             format!("service:systemd:start:{}", resource.unit),
             format!("service:systemd:enable:{}", resource.unit),
         ],
@@ -643,7 +648,7 @@ fn step_needs(step: &PlanStep) -> Vec<String> {
     }
 }
 
-fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
+fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> Result<usize> {
     let mut tracked = 0;
     for step in plan {
         let inserted = match step {
@@ -671,11 +676,11 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
                 .is_none(),
             PlanStep::FontNoop(resource) => state
                 .resources
-                .insert(font_id_for(resource), state_font(resource))
+                .insert(font_id_for(resource), state_font(resource)?)
                 .is_none(),
             PlanStep::SystemdUnitNoop(resource) => state
                 .resources
-                .insert(systemd_unit_id_for(resource), state_systemd_unit(resource))
+                .insert(systemd_unit_id_for(resource), state_systemd_unit(resource)?)
                 .is_none(),
             PlanStep::SystemGroupNoop(resource) => state
                 .resources
@@ -691,7 +696,7 @@ fn track_noop_resources(plan: &[PlanStep], state: &mut State) -> usize {
             tracked += 1;
         }
     }
-    tracked
+    Ok(tracked)
 }
 
 fn run_command(resource: &CommandResource) -> Result<()> {
@@ -746,12 +751,16 @@ fn apply_systemd_unit(resource: &SystemdUnitResource, state: &mut State) -> Resu
     apply_unit(resource)?;
     state
         .resources
-        .insert(systemd_unit_id_for(resource), state_systemd_unit(resource));
+        .insert(systemd_unit_id_for(resource), state_systemd_unit(resource)?);
     Ok(())
 }
 
-fn remove_systemd_unit(resource: &SystemdUnitResource, state: &mut State) -> Result<()> {
-    remove_unit(resource)?;
+fn remove_systemd_unit(
+    resource: &SystemdUnitResource,
+    digest: Option<&str>,
+    state: &mut State,
+) -> Result<()> {
+    remove_unit(resource, digest)?;
     state.resources.remove(&systemd_unit_id_for(resource));
     Ok(())
 }

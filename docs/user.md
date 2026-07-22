@@ -66,8 +66,8 @@ If a group is used in `dots.user.add_to_groups(...)` but does not exist and is
 not declared with `dots.group.create(...)`, `dots check` reports a conflict
 instead of creating it by accident.
 
-Groups declared with `dots.group.create(...)` are tracked when `dots check` or
-`dots apply` sees that they exist. If that declaration is removed later,
+Groups declared with `dots.group.create(...)` are tracked when `dots apply` sees
+that they exist. If that declaration is removed later,
 `dots check` shows the group removal. Memberships declared with
 `dots.user.add_to_groups(...)` are tracked the same way.
 

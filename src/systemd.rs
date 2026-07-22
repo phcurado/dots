@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
+use crate::managed_file::digest_file;
 use crate::state::StateResource;
 
 const UNIT_DIR: &str = "/etc/systemd/system";
@@ -63,26 +64,53 @@ pub(crate) fn apply_unit(resource: &SystemdUnitResource) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn remove_unit(resource: &SystemdUnitResource) -> Result<()> {
+pub(crate) fn unit_safe_to_remove(
+    resource: &SystemdUnitResource,
+    digest: Option<&str>,
+) -> Result<bool> {
+    let installed = installed_path(resource);
+    if !installed.exists() {
+        return Ok(true);
+    }
+    match digest {
+        Some(expected) => Ok(digest_file(&installed)? == expected),
+        None if resource.file.exists() => unit_file_matches(resource),
+        None => Ok(false),
+    }
+}
+
+pub(crate) fn remove_unit(resource: &SystemdUnitResource, digest: Option<&str>) -> Result<()> {
+    if !unit_safe_to_remove(resource, digest)? {
+        bail!(
+            "refusing to remove systemd unit changed outside dots: {}",
+            resource.unit
+        );
+    }
     run_sudo(["rm", "-f"], [installed_path(resource).as_path()])?;
     run_sudo(["systemctl", "daemon-reload"], std::iter::empty::<&Path>())
 }
 
-pub(crate) fn state_systemd_unit(resource: &SystemdUnitResource) -> StateResource {
-    StateResource::SystemdUnit {
+pub(crate) fn state_systemd_unit(resource: &SystemdUnitResource) -> Result<StateResource> {
+    Ok(StateResource::SystemdUnit {
         unit: resource.unit.clone(),
         file: resource.file.clone(),
-    }
+        digest: Some(digest_file(&installed_path(resource))?),
+    })
 }
 
-pub(crate) fn systemd_unit_from_state(resource: &StateResource) -> Option<SystemdUnitResource> {
-    let StateResource::SystemdUnit { unit, file } = resource else {
+pub(crate) fn systemd_unit_from_state(
+    resource: &StateResource,
+) -> Option<(SystemdUnitResource, Option<&str>)> {
+    let StateResource::SystemdUnit { unit, file, digest } = resource else {
         return None;
     };
-    Some(SystemdUnitResource {
-        unit: unit.clone(),
-        file: file.clone(),
-    })
+    Some((
+        SystemdUnitResource {
+            unit: unit.clone(),
+            file: file.clone(),
+        },
+        digest.as_deref(),
+    ))
 }
 
 fn installed_path(resource: &SystemdUnitResource) -> PathBuf {

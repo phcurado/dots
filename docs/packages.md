@@ -112,8 +112,8 @@ Packages:
   - yay ripgrep
 ```
 
-Packages declared in `dots.lua` are recorded in state when `dots check` or
-`dots apply` sees that they are installed. If the declaration is later removed,
+Packages declared in `dots.lua` are recorded in state when `dots apply` sees
+that they are installed. If the declaration is later removed,
 `dots check` can show the package removal.
 
 ## Custom providers

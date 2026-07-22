@@ -21,7 +21,12 @@ pub(crate) enum StateResource {
         name: String,
     },
     #[serde(rename = "systemd-unit")]
-    SystemdUnit { unit: String, file: PathBuf },
+    SystemdUnit {
+        unit: String,
+        file: PathBuf,
+        #[serde(default)]
+        digest: Option<String>,
+    },
     #[serde(rename = "compose")]
     Compose {
         name: String,
@@ -32,7 +37,12 @@ pub(crate) enum StateResource {
         fingerprint: String,
     },
     #[serde(rename = "font")]
-    Font { source: PathBuf, target: PathBuf },
+    Font {
+        source: PathBuf,
+        target: PathBuf,
+        #[serde(default)]
+        digest: Option<String>,
+    },
     #[serde(rename = "file")]
     File {
         target: PathBuf,
@@ -125,6 +135,36 @@ mod tests {
         let error = load_state(root.path()).unwrap_err().to_string();
 
         assert!(error.contains("failed to read"));
+    }
+
+    #[test]
+    fn older_resources_load_without_digests() {
+        let state: State = serde_json::from_str(
+            r#"{
+                "resources": {
+                    "font:/tmp/font": {
+                        "kind": "font",
+                        "source": "/tmp/source",
+                        "target": "/tmp/font"
+                    },
+                    "systemd-unit:example.service": {
+                        "kind": "systemd-unit",
+                        "unit": "example.service",
+                        "file": "/tmp/example.service"
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            state.resources["font:/tmp/font"],
+            StateResource::Font { digest: None, .. }
+        ));
+        assert!(matches!(
+            state.resources["systemd-unit:example.service"],
+            StateResource::SystemdUnit { digest: None, .. }
+        ));
     }
 
     #[test]

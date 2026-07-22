@@ -61,7 +61,7 @@ Source paths are relative to the dots project. Each file is installed in `/etc/s
 
 When applying, dots installs the files and reloads systemd before enabling or starting them. If you remove all declarations, dots stops and disables the timer before removing both files. Removing only `start` or `enable` keeps the unit files installed.
 
-`dots check` compares each source with its installed unit file. A changed source is shown as an update.
+`dots check` compares each source with its installed unit file. A changed source is shown as an update. Dots refuses to remove a unit file that changed outside dots.
 
 ## OpenRC
 

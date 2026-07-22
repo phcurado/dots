@@ -71,4 +71,4 @@ Fonts:
 ```
 
 If a managed font is removed from the repo, `dots check` shows a destroy for the
-installed copy.
+installed copy. If the installed copy changed outside dots, removal is refused.

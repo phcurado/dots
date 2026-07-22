@@ -61,10 +61,69 @@ fn check_prints_symlink_and_package_changes() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Created local state: .dots/state.json"));
+    assert!(!root.join(".dots/state.json").exists());
     assert!(stdout.contains("+ symlink ~/.zshrc -> .zshrc"));
     assert!(stdout.contains("+ fake bat"));
     assert!(stdout.contains("Check: 2 to create, 0 to update, 0 to destroy."));
+}
+
+#[test]
+fn apply_adopts_matching_resources_without_check_saving_state() {
+    let root = temp_dir("cli-adopt");
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        dots.provider.package("fake", {
+          available = "exit 0",
+          installed = "exit 0",
+          install = "exit 0",
+          remove = "exit 0",
+        })
+
+        dots.fake.install({ "bat" })
+        "#,
+    )
+    .unwrap();
+
+    let check = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(check.status.success());
+    assert!(!root.join(".dots/state.json").exists());
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .args(["apply", "--auto-approve"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(apply.status.success());
+    let state_path = root.join(".dots/state.json");
+    let state = fs::read_to_string(&state_path).unwrap();
+    assert!(state.contains("package:fake:bat"));
+
+    fs::write(
+        root.join("dots.lua"),
+        r#"
+        dots.provider.package("fake", {
+          available = "exit 0",
+          installed = "exit 0",
+          install = "exit 0",
+          remove = "exit 0",
+        })
+
+        dots.fake.install({ "bat", "fd" })
+        "#,
+    )
+    .unwrap();
+    let check = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(check.status.success());
+    assert_eq!(fs::read_to_string(state_path).unwrap(), state);
 }
 
 #[test]
@@ -390,7 +449,34 @@ esac
             .contains("systemd-unit:my-service.service")
     );
 
+    fs::write(
+        units.join("my-service.service"),
+        "[Service]\nExecStart=/usr/bin/false\n",
+    )
+    .unwrap();
     fs::write(root.join("dots.lua"), "").unwrap();
+    let conflict = Command::new(env!("CARGO_BIN_EXE_dots"))
+        .arg("check")
+        .current_dir(&root)
+        .env("PATH", &path)
+        .env("DOTS_SYSTEMD_UNIT_DIR", &units)
+        .env("FAKE_SYSTEMD_ENABLED", &enabled)
+        .env("FAKE_SYSTEMD_ACTIVE", &active)
+        .output()
+        .unwrap();
+    assert!(conflict.status.success());
+    assert!(
+        String::from_utf8(conflict.stdout)
+            .unwrap()
+            .contains("installed unit changed outside dots")
+    );
+    assert!(units.join("my-service.service").exists());
+
+    fs::write(
+        units.join("my-service.service"),
+        "[Service]\nExecStart=/usr/bin/true\n",
+    )
+    .unwrap();
     fs::remove_file(root.join("services/my-service.service")).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_dots"))
         .args(["apply", "--auto-approve"])
@@ -668,7 +754,6 @@ fn managed_file_adopts_identical_target_and_conflicts_with_different_target() {
     );
 
     fs::write(home.join("target"), "different\n").unwrap();
-    fs::remove_dir_all(root.join(".dots")).unwrap();
     let conflict = Command::new(env!("CARGO_BIN_EXE_dots"))
         .arg("check")
         .current_dir(&root)

@@ -4,6 +4,7 @@ use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{Context, Result, bail};
 
+use crate::managed_file::digest_file;
 use crate::state::{State, StateResource};
 use crate::symlink::home_dir;
 
@@ -98,11 +99,12 @@ fn same_file_contents(left: &Path, right: &Path) -> Result<bool> {
     Ok(left == right)
 }
 
-pub(crate) fn state_font(resource: &FontResource) -> StateResource {
-    StateResource::Font {
+pub(crate) fn state_font(resource: &FontResource) -> Result<StateResource> {
+    Ok(StateResource::Font {
         source: resource.source.clone(),
         target: resource.target.clone(),
-    }
+        digest: Some(digest_file(&resource.target)?),
+    })
 }
 
 pub(crate) fn font_id_for(resource: &FontResource) -> String {
@@ -122,14 +124,39 @@ pub(crate) fn apply_font(resource: &FontResource, state: &mut State) -> Result<(
     })?;
     state
         .resources
-        .insert(font_id_for(resource), state_font(resource));
+        .insert(font_id_for(resource), state_font(resource)?);
     Ok(())
 }
 
+pub(crate) fn font_safe_to_remove(
+    source: &Path,
+    target: &Path,
+    digest: Option<&str>,
+) -> Result<bool> {
+    if !target.exists() {
+        return Ok(true);
+    }
+    match digest {
+        Some(expected) => Ok(digest_file(target)? == expected),
+        None => same_file_contents(source, target),
+    }
+}
+
 pub(crate) fn remove_font(resource: &StateResource, state: &mut State) -> Result<()> {
-    let StateResource::Font { target, .. } = resource else {
+    let StateResource::Font {
+        source,
+        target,
+        digest,
+    } = resource
+    else {
         return Ok(());
     };
+    if !font_safe_to_remove(source, target, digest.as_deref())? {
+        bail!(
+            "refusing to remove font changed outside dots: {}",
+            target.display()
+        );
+    }
     if target.exists() {
         fs::remove_file(target)?;
     }
@@ -168,5 +195,29 @@ mod tests {
         assert!(is_font_file(Path::new("font.ttf")));
         assert!(is_font_file(Path::new("font.OTF")));
         assert!(!is_font_file(Path::new("font.txt")));
+    }
+
+    #[test]
+    fn refuses_to_remove_a_changed_font() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.ttf");
+        let target = root.path().join("target.ttf");
+        fs::write(&source, "original").unwrap();
+        fs::write(&target, "original").unwrap();
+        let resource = FontResource { source, target };
+        let state_resource = state_font(&resource).unwrap();
+        let mut state = State::default();
+        state
+            .resources
+            .insert(font_id_for(&resource), state_resource.clone());
+        fs::write(&resource.target, "changed").unwrap();
+
+        let error = remove_font(&state_resource, &mut state)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("changed outside dots"));
+        assert!(resource.target.exists());
+        assert!(state.resources.contains_key(&font_id_for(&resource)));
     }
 }

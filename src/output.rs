@@ -135,7 +135,7 @@ pub(crate) fn summarize_plan(plan: &[PlanStep]) -> PlanSummary {
             PlanStep::SymlinkRemove { .. }
             | PlanStep::PackageRemove { .. }
             | PlanStep::ServiceRemove { .. }
-            | PlanStep::SystemdUnitRemove(_)
+            | PlanStep::SystemdUnitRemove { .. }
             | PlanStep::ComposeRemove { .. }
             | PlanStep::FontRemove { .. }
             | PlanStep::SystemGroupRemove(_)
@@ -421,7 +421,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
             step,
             PlanStep::SystemdUnitCreate(_)
                 | PlanStep::SystemdUnitUpdate(_)
-                | PlanStep::SystemdUnitRemove(_)
+                | PlanStep::SystemdUnitRemove { .. }
                 | PlanStep::SystemdUnitConflict { .. }
         )
     });
@@ -445,7 +445,7 @@ pub(crate) fn print_plan(project: &Project, plan: &[PlanStep], show_apply_hint: 
                 PlanStep::SystemdUnitUpdate(resource) => {
                     println!("  {} apply {}", yellow("~"), resource.unit)
                 }
-                PlanStep::SystemdUnitRemove(resource) => {
+                PlanStep::SystemdUnitRemove { resource, .. } => {
                     println!("  {} remove {}", red("-"), resource.unit)
                 }
                 PlanStep::SystemdUnitConflict { resource, reason } => {
@@ -752,15 +752,6 @@ pub(crate) fn print_state(project: &Project, state: &State) {
         }
         println!("    {}", dim(id));
     }
-}
-
-pub(crate) fn print_state_initialized(project: &Project, state_path: &Path) {
-    println!(
-        "{} {}",
-        dim("Created local state:"),
-        dim(&display_source(project, state_path))
-    );
-    println!();
 }
 
 pub(crate) fn with_spinner<T>(message: &str, work: impl FnOnce() -> Result<T>) -> Result<T> {

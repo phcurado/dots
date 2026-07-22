@@ -22,8 +22,7 @@ use apply::apply_plan;
 use clap::{Parser, Subcommand};
 use config::load_config;
 use output::{
-    bold, print_plan, print_state, print_state_initialized, print_symlink_candidates,
-    summarize_plan, with_spinner,
+    bold, print_plan, print_state, print_symlink_candidates, summarize_plan, with_spinner,
 };
 use plan::{PlanStep, build_plan, refresh_state_from_system};
 use platform::selected_profile;
@@ -121,16 +120,15 @@ fn main() -> Result<()> {
         }
     })?;
     let state_path = project.root.join(".dots/state.json");
-    let state_exists = state_path.exists();
     let mut state = load_state(&state_path)?;
 
     match command {
         Command::Check => {
-            let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
+            let plan = check_project(&project, &profile, &mut state)?;
             print_plan(&project, &plan, true);
         }
         Command::Apply { auto_approve } => {
-            let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
+            let plan = check_project(&project, &profile, &mut state)?;
             print_plan(&project, &plan, false);
             confirm_apply(&plan, auto_approve)?;
             apply_plan_and_save(&plan, &state_path, &mut state)?;
@@ -139,7 +137,7 @@ fn main() -> Result<()> {
             save_state(&state_path, &state)?;
         }
         Command::Symlink { path, command } => {
-            let plan = check_project(&project, &profile, &state_path, state_exists, &mut state)?;
+            let plan = check_project(&project, &profile, &mut state)?;
             run_symlink_command(
                 &project,
                 &profile,
@@ -165,17 +163,11 @@ fn main() -> Result<()> {
 fn check_project(
     project: &Project,
     profile: &str,
-    state_path: &Path,
-    state_exists: bool,
     state: &mut State,
 ) -> Result<Vec<plan::PlanStep>> {
-    if !state_exists {
-        print_state_initialized(project, state_path);
-    }
     with_spinner("Checking system...", || {
         let config = load_config(project, profile)?;
         refresh_state_from_system(&config, state)?;
-        save_state(state_path, state)?;
         build_plan(&config, state)
     })
 }

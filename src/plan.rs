@@ -2,15 +2,15 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
-use crate::command::{CommandResource, command_current};
+use crate::command::{CommandResource, command_current, command_id_for};
 use crate::config::Config;
 use crate::docker::{
     ComposeResource, compose_available, compose_current, compose_from_state, compose_id_for,
     state_compose,
 };
-use crate::font::{FontResource, font_matches, state_font};
+use crate::font::{FontResource, font_matches, font_safe_to_remove, state_font};
 use crate::managed_file::{FileResource, FileStatus, file_id_for, inspect_file, state_file};
 use crate::managed_output::{OutputValue, resolve_outputs};
 use crate::package::{
@@ -33,7 +33,7 @@ use crate::symlink::{
 };
 use crate::systemd::{
     SystemdUnitResource, systemd_available, systemd_unit_from_state, systemd_unit_id_for,
-    unit_current, unit_file_matches, unit_installed,
+    unit_current, unit_file_matches, unit_installed, unit_safe_to_remove,
 };
 use crate::user::{
     SystemGroupResource, UserGroupResource, UserShellResource, current_shell, shell_matches,
@@ -94,7 +94,10 @@ pub(crate) enum PlanStep {
     },
     SystemdUnitCreate(SystemdUnitResource),
     SystemdUnitUpdate(SystemdUnitResource),
-    SystemdUnitRemove(SystemdUnitResource),
+    SystemdUnitRemove {
+        resource: SystemdUnitResource,
+        digest: Option<String>,
+    },
     SystemdUnitNoop(SystemdUnitResource),
     SystemdUnitConflict {
         resource: SystemdUnitResource,
@@ -119,6 +122,7 @@ pub(crate) enum PlanStep {
     FontRemove {
         source: PathBuf,
         target: PathBuf,
+        digest: Option<String>,
     },
     FontNoop(FontResource),
     FontConflict {
@@ -248,7 +252,7 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
             if resource.file.exists() && unit_current(resource)? {
                 state.resources.insert(
                     systemd_unit_id_for(resource),
-                    crate::systemd::state_systemd_unit(resource),
+                    crate::systemd::state_systemd_unit(resource)?,
                 );
             }
         }
@@ -277,7 +281,7 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
         if font_matches(resource)? {
             state
                 .resources
-                .insert(font_id_for(resource), state_font(resource));
+                .insert(font_id_for(resource), state_font(resource)?);
         }
     }
 
@@ -323,6 +327,8 @@ pub(crate) fn refresh_state_from_system(config: &Config, state: &mut State) -> R
 }
 
 pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>> {
+    validate_command_dependencies(config)?;
+
     let mut plan = Vec::new();
     let mut declared = BTreeSet::new();
     let mut declared_symlink_targets = BTreeSet::new();
@@ -742,10 +748,28 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                     });
                 }
             }
-            StateResource::Font { source, target } => plan.push(PlanStep::FontRemove {
-                source: source.clone(),
-                target: target.clone(),
-            }),
+            StateResource::Font {
+                source,
+                target,
+                digest,
+            } => {
+                let resource = FontResource {
+                    source: source.clone(),
+                    target: target.clone(),
+                };
+                if font_safe_to_remove(source, target, digest.as_deref())? {
+                    plan.push(PlanStep::FontRemove {
+                        source: source.clone(),
+                        target: target.clone(),
+                        digest: digest.clone(),
+                    });
+                } else {
+                    plan.push(PlanStep::FontConflict {
+                        resource,
+                        reason: "installed font changed outside dots".to_string(),
+                    });
+                }
+            }
             StateResource::File { target, .. } => plan.push(PlanStep::FileForget {
                 target: target.clone(),
             }),
@@ -797,14 +821,22 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
                 }
             }
             StateResource::SystemdUnit { .. } => {
-                let resource =
+                let (resource, digest) =
                     systemd_unit_from_state(resource).expect("systemd unit state resource");
-                if systemd_is_available {
-                    plan.push(PlanStep::SystemdUnitRemove(resource));
-                } else {
+                if !systemd_is_available {
                     plan.push(PlanStep::SystemdUnitConflict {
                         resource,
                         reason: "systemd is not available".to_string(),
+                    });
+                } else if unit_safe_to_remove(&resource, digest)? {
+                    plan.push(PlanStep::SystemdUnitRemove {
+                        resource,
+                        digest: digest.map(str::to_string),
+                    });
+                } else {
+                    plan.push(PlanStep::SystemdUnitConflict {
+                        resource,
+                        reason: "installed unit changed outside dots".to_string(),
                     });
                 }
             }
@@ -838,6 +870,32 @@ pub(crate) fn build_plan(config: &Config, state: &State) -> Result<Vec<PlanStep>
     plan.extend(deferred_brew_tap_removals);
 
     Ok(plan)
+}
+
+fn validate_command_dependencies(config: &Config) -> Result<()> {
+    let mut provided = BTreeSet::new();
+    for command in &config.commands {
+        provided.insert(command_id_for(command));
+        provided.extend(command.provides.iter().cloned());
+    }
+    for resource in &config.packages {
+        provided.insert(package_id_for(resource));
+        if let Some(provider) = config.package_providers.get(&resource.provider) {
+            provided.extend(package_provides(provider, resource));
+        }
+    }
+
+    for command in &config.commands {
+        for dependency in &command.needs {
+            if !provided.contains(dependency) {
+                bail!(
+                    "command {} requires missing dependency: {dependency}",
+                    command.name
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn plan_commands(commands: &[CommandResource]) -> Result<(Vec<PlanStep>, BTreeSet<String>)> {
@@ -922,6 +980,24 @@ mod tests {
             package_provides: BTreeMap::new(),
             matcher: crate::package::PackageMatcher::Exact,
         }
+    }
+
+    #[test]
+    fn missing_command_dependency_errors() {
+        let mut config = Config::default();
+        config.commands.push(CommandResource {
+            name: "prettier".to_string(),
+            check: "exit 1".to_string(),
+            apply: "exit 0".to_string(),
+            needs: vec!["node".to_string()],
+            provides: Vec::new(),
+        });
+
+        let error = build_plan(&config, &State::default())
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(error, "command prettier requires missing dependency: node");
     }
 
     #[test]
@@ -1021,6 +1097,28 @@ mod tests {
                 PlanStep::PackageRemove { resource: formula, .. },
                 PlanStep::PackageRemove { resource: tap, .. }
             ] if formula.provider == "brew" && tap.provider == "brew-tap"
+        ));
+    }
+
+    #[test]
+    fn changed_undeclared_font_is_a_conflict() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.ttf");
+        let target = root.path().join("target.ttf");
+        fs::write(&source, "original").unwrap();
+        fs::write(&target, "original").unwrap();
+        let resource = FontResource { source, target };
+        let mut state = State::default();
+        state
+            .resources
+            .insert(font_id_for(&resource), state_font(&resource).unwrap());
+        fs::write(&resource.target, "changed").unwrap();
+
+        let plan = build_plan(&Config::default(), &state).unwrap();
+
+        assert!(matches!(
+            plan.as_slice(),
+            [PlanStep::FontConflict { reason, .. }] if reason == "installed font changed outside dots"
         ));
     }
 
