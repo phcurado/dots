@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.9.0
+
+### Changed
+
+- `dots check` no longer writes local state; matching resources are recorded by `dots apply`.
+- Missing command dependencies now fail during planning.
+- Managed fonts and systemd units are protected from removal when changed outside dots.
+
 ## 0.8.2
 
 ### Fixed
